@@ -60,7 +60,7 @@ EXPOSE 3112
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
   CMD wget --no-verbose --tries=1 --spider http://localhost:3111/api/v1/health || exit 1
 
-CMD ["iii", "--config", "config.yaml"]
+CMD ["/bin/sh", "-c", "echo '--- iii version ---'; iii --version || true; echo '--- head config.yaml ---'; head -20 config.yaml; echo '--- starting iii ---'; exec iii --config config.yaml"]
 
 LABEL org.opencontainers.image.title="Carrier Sales API" \
       org.opencontainers.image.description="Motia-powered Bridge API for HappyRobot carrier sales automation"
