@@ -1,0 +1,31 @@
+**/node_modules
+**/dist
+**/.turbo
+**/.vite
+**/coverage
+**/test-results
+**/playwright-report
+**/*.tsbuildinfo
+
+.git
+.github
+.husky
+
+# Env files - Dokploy injects secrets at runtime / build time
+.env
+.env.*
+!.env.example
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.vscode
+.idea
+
+# Terraform leftovers (deprecated)
+infra/.terraform
+infra/*.tfstate*
+infra/terraform.tfvars
+
+# Docs & infra that aren't needed in the image
+docs

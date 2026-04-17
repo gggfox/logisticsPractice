@@ -1,0 +1,24 @@
+node_modules/
+dist/
+.turbo/
+coverage/
+*.tsbuildinfo
+
+# Environment
+.env
+.env.local
+.env.production
+
+# Convex
+packages/convex/convex/_generated/
+
+# Vite
+apps/dashboard/.vite/
+
+# Playwright
+apps/dashboard/test-results/
+apps/dashboard/playwright-report/
+
+# OS
+.DS_Store
+Thumbs.db

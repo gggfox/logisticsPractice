@@ -1,0 +1,136 @@
+### Carrier Sales API - REST Client request collection
+###
+### Works with the VS Code "REST Client" extension and the JetBrains HTTP Client.
+### Start the API first:
+###   pnpm --filter @carrier-sales/api dev   # http://localhost:4000
+###
+### The `{{$dotenv ...}}` helper reads from a `.env` at the workspace root.
+### If you don't have one yet, copy `.env.example` to `.env` or replace the
+### variables below with the literal keys.
+
+@baseUrl = http://localhost:4000
+@apiKey = {{$dotenv BRIDGE_API_KEY}}
+@adminKey = {{$dotenv ADMIN_API_KEY}}
+# @apiKey = your_bridge_api_key
+# @adminKey = your_admin_api_key
+
+@loadId = LOAD-0001
+@mcNumber = 123456
+@callId = call-demo-001
+
+###
+# @name health
+# Public health probe - no auth required.
+GET {{baseUrl}}/api/v1/health
+Accept: application/json
+
+###
+# @name searchLoads
+# Search available loads. All query params are optional filters.
+# Fields returned match requirements.md (load_id, origin, destination,
+# pickup_datetime, delivery_datetime, equipment_type, loadboard_rate,
+# notes, weight, commodity_type, num_of_pieces, miles, dimensions).
+GET {{baseUrl}}/api/v1/loads?origin=Dallas, TX&destination=Chicago, IL&equipment_type=dry_van&pickup_date=2026-04-20
+x-api-key: {{apiKey}}
+Accept: application/json
+
+###
+# @name searchLoadsAll
+# Search with no filters (lists everything available).
+GET {{baseUrl}}/api/v1/loads
+x-api-key: {{apiKey}}
+Accept: application/json
+
+###
+# @name getLoad
+# Fetch a specific load by its load_id.
+GET {{baseUrl}}/api/v1/loads/{{loadId}}
+x-api-key: {{apiKey}}
+Accept: application/json
+
+###
+# @name getFirstLoadFromSearch
+# Chained example: fetch the first load_id returned by `searchLoads`.
+# Run `searchLoads` first so REST Client has a cached response.
+GET {{baseUrl}}/api/v1/loads/{{searchLoads.response.body.loads[0].load_id}}
+x-api-key: {{apiKey}}
+Accept: application/json
+
+###
+# @name verifyCarrier
+# Verify a carrier by MC number via FMCSA.
+GET {{baseUrl}}/api/v1/carriers/{{mcNumber}}
+x-api-key: {{apiKey}}
+Accept: application/json
+
+###
+# @name logOffer
+# Post a carrier's offer. Server evaluates acceptance or returns a counter.
+POST {{baseUrl}}/api/v1/offers
+x-api-key: {{apiKey}}
+Content-Type: application/json
+
+{
+  "call_id": "{{callId}}",
+  "load_id": "{{loadId}}",
+  "carrier_mc": "{{mcNumber}}",
+  "offered_rate": 2100
+}
+
+###
+# @name logCounterOffer
+# Same call_id, second round - triggers round-2 negotiation logic.
+POST {{baseUrl}}/api/v1/offers
+x-api-key: {{apiKey}}
+Content-Type: application/json
+
+{
+  "call_id": "{{callId}}",
+  "load_id": "{{loadId}}",
+  "carrier_mc": "{{mcNumber}}",
+  "offered_rate": 2250
+}
+
+###
+# @name callCompletedWebhook
+# Inbound webhook from HappyRobot when a call ends.
+# `x-webhook-signature` is optional: required only when WEBHOOK_SECRET is set
+# on the server. For local testing leave it off or compute:
+#   echo -n '<raw body>' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET"
+POST {{baseUrl}}/api/v1/webhooks/call-completed
+x-api-key: {{apiKey}}
+Content-Type: application/json
+
+{
+  "call_id": "{{callId}}",
+  "phone_number": "+15551234567",
+  "carrier_mc": "{{mcNumber}}",
+  "load_id": "{{loadId}}",
+  "transcript": "Carrier accepted at $2100 after one counter.",
+  "duration_seconds": 180,
+  "started_at": "2026-04-16T10:00:00.000Z",
+  "ended_at": "2026-04-16T10:03:00.000Z",
+  "status": "completed",
+  "extracted_data": {
+    "final_rate": 2100,
+    "agreed": true
+  }
+}
+
+###
+# @name getTranscript
+# Pull the transcript for a completed call from HappyRobot.
+GET {{baseUrl}}/api/v1/calls/{{callId}}/transcript
+x-api-key: {{apiKey}}
+Accept: application/json
+
+###
+# @name adminSeed
+# Seed demo loads (admin only - uses ADMIN_API_KEY).
+POST {{baseUrl}}/api/v1/admin/seed
+x-api-key: {{adminKey}}
+Content-Type: application/json
+
+{
+  "count": 50
+}

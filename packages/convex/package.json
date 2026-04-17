@@ -1,0 +1,19 @@
+{
+  "name": "@carrier-sales/convex",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check convex/",
+    "dev": "npx convex dev",
+    "deploy": "npx convex deploy"
+  },
+  "dependencies": {
+    "convex": "^1.17.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  }
+}

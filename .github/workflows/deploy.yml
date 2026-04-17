@@ -1,0 +1,35 @@
+name: Post-Deploy Health Check
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  health-check:
+    name: Wait for Dokploy and verify API health
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Wait for Dokploy to finish the rebuild
+        run: |
+          echo "Dokploy auto-deploys via its GitHub webhook on push to main."
+          echo "Giving the VPS time to pull, build, and swap containers..."
+          sleep 120
+
+      - name: Verify API health
+        env:
+          API_URL: ${{ vars.API_URL }}
+          BRIDGE_API_KEY: ${{ secrets.BRIDGE_API_KEY }}
+        run: |
+          if [ -z "${API_URL}" ]; then
+            echo "API_URL repo variable not set; skipping health check."
+            exit 0
+          fi
+          curl --fail --silent --show-error --retry 10 --retry-delay 15 --retry-all-errors \
+            -H "x-api-key: ${BRIDGE_API_KEY}" \
+            "${API_URL}/api/v1/health"

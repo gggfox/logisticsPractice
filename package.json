@@ -1,0 +1,27 @@
+{
+  "name": "inbound-carrier-sales",
+  "private": true,
+  "packageManager": "pnpm@10.30.3",
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "test:e2e": "turbo run test:e2e",
+    "format": "biome format --write .",
+    "check": "biome check --write .",
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "^3.0.0",
+    "@biomejs/biome": "^1.9.0",
+    "husky": "^9.0.0",
+    "lint-staged": "^15.0.0",
+    "turbo": "^2.0.0",
+    "typescript": "^5.7.0"
+  },
+  "lint-staged": {
+    "*.{ts,tsx,js,jsx,json}": ["biome check --write --no-errors-on-unmatched"]
+  }
+}

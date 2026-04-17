@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "lib": ["ES2022"],
+    "exactOptionalPropertyTypes": false,
+    "noEmit": true
+  },
+  "include": ["vite.config.ts", "postcss.config.ts", "tailwind.config.ts"]
+}

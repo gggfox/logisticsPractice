@@ -1,0 +1,3 @@
+name: carrier-sales-api
+port: 4000
+stepsDir: ./src/steps
