@@ -42,6 +42,9 @@ WORKDIR /app
 COPY --from=iii-installer /root/.local/bin/iii /usr/local/bin/iii
 COPY --from=builder --chown=appuser:appgroup /app/apps/api/dist/index-production.js ./dist/
 COPY --from=builder --chown=appuser:appgroup /app/apps/api/dist/index-production.js.map ./dist/
+# Bump to bust Docker layer cache when we only change config-production.yaml.
+ARG CONFIG_REV=2026-04-17-01
+RUN echo "config rev ${CONFIG_REV}" > /tmp/.config-rev
 COPY --from=builder --chown=appuser:appgroup /app/apps/api/config-production.yaml ./config.yaml
 COPY --from=builder --chown=appuser:appgroup /app/apps/api/package.json ./package.json
 
