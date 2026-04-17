@@ -42,7 +42,7 @@ WORKDIR /app
 COPY --from=iii-installer /root/.local/bin/iii /usr/local/bin/iii
 COPY --from=builder --chown=appuser:appgroup /app/apps/api/dist/index-production.js ./dist/
 COPY --from=builder --chown=appuser:appgroup /app/apps/api/dist/index-production.js.map ./dist/
-ARG CONFIG_REV=2026-04-17-02
+ARG CONFIG_REV=2026-04-17-03
 RUN echo "config rev ${CONFIG_REV}" > /tmp/.config-rev
 COPY --from=builder --chown=appuser:appgroup /app/apps/api/config-production.yaml ./config.yaml
 COPY --from=builder --chown=appuser:appgroup /app/apps/api/package.json ./package.json
@@ -56,7 +56,7 @@ EXPOSE 3112
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
   CMD wget --no-verbose --tries=1 --spider http://localhost:3111/api/v1/health || exit 1
 
-CMD ["iii", "--config", "config.yaml"]
+CMD ["/bin/sh", "-c", "echo '--- env (redacted values) ---'; env | awk -F= '{print $1\"=<set>\"}'; echo '--- starting iii ---'; iii --config config.yaml; status=$?; echo \"--- iii exited status=$status ---\"; sleep 3600"]
 
 LABEL org.opencontainers.image.title="Carrier Sales API" \
       org.opencontainers.image.description="Motia-powered Bridge API for HappyRobot carrier sales automation"
