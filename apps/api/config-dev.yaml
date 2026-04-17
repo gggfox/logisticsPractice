@@ -1,13 +1,19 @@
-# Local dev config for the `iii` engine. Mirrors config-production.yaml but
-# swaps Redis / Bun for built-in/in-memory adapters so you can run it without
-# spinning up infra. Start with:
+# Local dev config for the `iii` engine (0.10.x schema).
+# Mirrors config-production.yaml but swaps Redis for built-in/in-memory
+# adapters so you can run it without spinning up infra.
 #
 #   pnpm --filter @carrier-sales/api dev            # bundle dist/index-dev.js
 #   iii --config apps/api/config-dev.yaml           # run the engine (ports 3111/3112)
 #   iii console                                     # open http://127.0.0.1:3113
+#
+# NOTE: iii 0.11 renamed `modules:` -> `workers:` and `class:` -> `name:` and
+# replaced the long Rust-style adapter paths with short IDs (`kv`, `redis`,
+# `builtin`, `local`, ...). We are pinned to 0.10.x because motia@1.0.0 still
+# emits the old `api` / `queue` trigger types that 0.10 accepts; see
+# .cursor/plans/fix-iii-motia-version-drift_5f1a3b86.plan.md.
 
-workers:
-  - name: iii-http
+modules:
+  - class: modules::api::RestApiModule
     config:
       port: ${HTTP_PORT:3111}
       host: 0.0.0.0
@@ -25,34 +31,38 @@ workers:
           - DELETE
           - OPTIONS
 
-  - name: iii-stream
+  - class: modules::stream::StreamModule
     config:
       port: ${STREAM_PORT:3112}
       host: 0.0.0.0
       adapter:
-        name: kv
+        class: modules::stream::adapters::KvStore
+        config:
+          store_method: in_memory
 
-  - name: iii-state
+  - class: modules::state::StateModule
     config:
       adapter:
-        name: kv
+        class: modules::state::adapters::KvStore
+        config:
+          store_method: in_memory
 
-  - name: iii-pubsub
+  - class: modules::pubsub::PubSubModule
     config:
       adapter:
-        name: local
+        class: modules::pubsub::LocalAdapter
 
-  - name: iii-queue
+  - class: modules::queue::QueueModule
     config:
       adapter:
-        name: builtin
+        class: modules::queue::BuiltinQueueAdapter
 
-  - name: iii-cron
+  - class: modules::cron::CronModule
     config:
       adapter:
-        name: kv
+        class: modules::cron::KvCronAdapter
 
-  - name: iii-observability
+  - class: modules::observability::OtelModule
     config:
       enabled: ${OTEL_ENABLED:false}
       service_name: ${OTEL_SERVICE_NAME:carrier-sales-api}
@@ -66,7 +76,7 @@ workers:
       logs_enabled: ${OTEL_LOGS_ENABLED:false}
       logs_exporter: ${OTEL_LOGS_EXPORTER:otlp}
 
-  - name: iii-exec
+  - class: modules::shell::ExecModule
     config:
       exec:
         - node --enable-source-maps dist/index-dev.js

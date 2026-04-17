@@ -1,0 +1,82 @@
+---
+description: Dockerfile + docker-compose conventions for the Dokploy deploy
+globs: apps/*/Dockerfile,docker-compose*.yml,infra/**
+alwaysApply: false
+---
+
+# Docker + Dokploy
+
+Deep-dive: `.cursor/skills/docker-dokploy/SKILL.md`. Live docs:
+[docs/dokploy-setup.md](mdc:docs/dokploy-setup.md).
+
+## Base images (pin, don't drift)
+
+- API runner: `oven/bun:1.1-slim`
+- Dashboard runner: `nginx:1.27-alpine`
+- Builder (both): `node:22-alpine` + `corepack enable && corepack prepare pnpm@latest`
+
+Swapping a base image is a supply-chain change. Don't bump casually.
+
+## Build layering (cache-preserving)
+
+Always in this order:
+
+1. `COPY package.json pnpm-workspace.yaml pnpm-lock.yaml turbo.json tsconfig.base.json ./`
+2. `COPY packages/*/package.json packages/*/` + `apps/<app>/package.json apps/<app>/`
+3. `RUN pnpm install --frozen-lockfile`
+4. `COPY packages/` and `COPY apps/<app>/` (full source)
+5. `RUN pnpm --filter @carrier-sales/shared build && pnpm --filter @carrier-sales/<app> build`
+
+`--frozen-lockfile` is required. Never `--no-frozen-lockfile` in CI or
+Docker. Shared package builds **before** the app -- the app imports
+from `dist/`.
+
+## Non-root + chown
+
+```dockerfile
+RUN groupadd --system --gid 1001 appgroup && \
+    useradd --system --uid 1001 --gid appgroup --create-home appuser
+# ...
+COPY --from=builder --chown=appuser:appgroup /app/... ./...
+USER appuser
+```
+
+Currently only the API image does this. The dashboard image should
+too -- nginx drops privileges internally but the filesystem is still
+root-owned. Add non-root to the dashboard when you touch it.
+
+## Healthchecks (required)
+
+```dockerfile
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+  CMD wget --no-verbose --tries=1 --spider http://localhost:<port>/<path> || exit 1
+```
+
+Use `wget --spider`, not `curl` -- neither `oven/bun:1.1-slim` nor
+`nginx:1.27-alpine` ships curl, and adding it just for healthcheck
+bloats the image.
+
+## Build args vs runtime env
+
+- **Build args**: public envs baked into bundles (`VITE_CONVEX_URL`).
+  Changing them requires a rebuild. Never a secret.
+- **Runtime env**: everything else, injected by Dokploy's Env tab or
+  `env_file: .env`. Secrets live here.
+
+Baking a secret into an image is forbidden. A build log with
+`ENV HAPPYROBOT_API_KEY=...` is a PR-blocker.
+
+## Labels
+
+Every image carries:
+
+```dockerfile
+LABEL org.opencontainers.image.title="<human name>" \
+      org.opencontainers.image.description="<one line>"
+```
+
+## Pinned installs
+
+The `iii` CLI install in the API Dockerfile uses `VERSION=0.10.0`.
+Bump that field deliberately in its own commit; do not version-bump
+drive-by.

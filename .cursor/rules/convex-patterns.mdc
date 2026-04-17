@@ -1,0 +1,124 @@
+---
+description: Convex schema, query, and mutation conventions
+globs: packages/convex/convex/**/*.ts
+alwaysApply: false
+---
+
+# Convex patterns (`packages/convex`)
+
+Conventions for tables, queries, mutations, and actions in
+`packages/convex/convex/**`. Mirrors Zod contracts (see
+`.cursor/rules/zod-contracts.mdc`). Deep-dive:
+`.cursor/skills/convex-patterns/SKILL.md`.
+
+## Index first
+
+Any lookup by a business id must use a named index:
+
+```ts
+// GOOD
+await ctx.db
+  .query('loads')
+  .withIndex('by_load_id', (q) => q.eq('load_id', args.load_id))
+  .first()
+
+// BAD -- full-table scan
+await ctx.db.query('loads').filter((q) => q.eq(q.field('load_id'), args.load_id)).first()
+```
+
+If the index doesn't exist, add it to the table in
+[packages/convex/convex/schema.ts](mdc:packages/convex/convex/schema.ts)
+**before** writing the query. Existing indexes: see the `.index(...)` chains
+on each table.
+
+`.filter()` is only acceptable for secondary predicates on a field that is
+*not* indexed (e.g. partial string match on already-narrowed results).
+
+## Validators match the Zod schema
+
+Every `query` / `mutation` arg declares an explicit `v.*` validator. The
+validator shape must match the Zod schema field-for-field (rule 2):
+
+| Zod | Convex |
+| --- | --- |
+| `z.string()` / `.datetime()` | `v.string()` |
+| `z.number()` / `.positive()` / `.int()` | `v.number()` |
+| `z.boolean()` | `v.boolean()` |
+| `z.string().optional()` | `v.optional(v.string())` |
+| `z.enum([...])` | `v.string()` (value list enforced at the schema layer) |
+| `z.object({ a, b })` | `v.object({ a: ..., b: ... })` |
+| `z.array(T)` | `v.array(...)` |
+
+`args: {}` only for truly zero-arg queries.
+
+## Return single rows correctly
+
+- `.first()` for "get one by id"; it returns `T | null` -- always handle `null`.
+- `.take(N)` for bounded pagination (prefer this when wiring pagination).
+- `.collect()` only when you know the result set is bounded by an index.
+- Never `.collect().slice(0, N)` as a long-term pattern -- it reads the full
+  table into memory. It exists today in `getRecent`; replace when touched.
+
+## Upsert pattern
+
+```ts
+const existing = await ctx.db
+  .query('loads')
+  .withIndex('by_load_id', (q) => q.eq('load_id', args.load_id))
+  .first()
+
+if (existing) {
+  await ctx.db.patch(existing._id, args)
+  return existing._id
+}
+return await ctx.db.insert('loads', args)
+```
+
+Never hand-roll an id. Convex generates `_id`.
+
+## Partial patches
+
+Use a typed `Record<string, unknown>` only when the update shape is
+genuinely dynamic (optional fields that may or may not be present):
+
+```ts
+const patch: Record<string, unknown> = { outcome: args.outcome }
+if (args.sentiment !== undefined) patch.sentiment = args.sentiment
+await ctx.db.patch(call._id, patch)
+```
+
+If every field is always present, build a typed object literal and pass it
+directly.
+
+## Dates
+
+Store ISO strings (`v.string()`). Never `Date`, epoch `number`, or any
+Convex time helper. Sort by timestamp via a dedicated `by_<field>_at` index.
+
+## Not-found behavior
+
+Mutations `throw new Error(\`Load ${id} not found\`)` for impossible state.
+The Motia step catches and returns the 4xx body. Don't return `null` from a
+mutation for a missing id.
+
+Queries return `null` from `.first()` for missing; the caller decides 404.
+
+## Actions, queries, mutations
+
+- `query` / `mutation` = DB-only, no external fetch (no `fetch()`, no SDK
+  calls).
+- `action` = the escape hatch for external calls. **This project doesn't use
+  Convex actions** -- external calls (FMCSA, HappyRobot) live in Motia
+  steps calling `convexService`. Do not introduce actions without a
+  reason.
+
+## Cross-table work
+
+Loops with awaits = waterfall. For N lookups, `Promise.all`:
+
+```ts
+const loads = await Promise.all(calls.map((c) => ctx.db.query('loads').withIndex(...).first()))
+```
+
+This rule also applies in Motia cron steps (see
+[apps/api/src/steps/cron/aggregate-metrics.step.ts](mdc:apps/api/src/steps/cron/aggregate-metrics.step.ts)).

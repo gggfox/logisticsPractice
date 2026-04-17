@@ -1,0 +1,55 @@
+---
+description: Vitest (unit) and Playwright (e2e) discipline for the monorepo
+globs: **/*.test.ts,apps/dashboard/e2e/**/*.spec.ts
+alwaysApply: false
+---
+
+# Testing discipline
+
+Vitest for unit, Playwright for dashboard e2e. Deep-dive:
+`.cursor/skills/testing/SKILL.md`.
+
+## Unit (Vitest)
+
+- Tests are **pure**. No network, no Convex, no FMCSA, no HappyRobot.
+- Co-locate: `apps/api/src/services/__tests__/foo.service.test.ts`
+  next to `foo.service.ts`. One test file per unit.
+- Import the pure function from the source module -- don't copy it
+  into the test.
+- No `any` in fixtures. Use `as const` on enum members:
+  `equipment_type: 'dry_van' as const`.
+- No `new Date()` in assertion values. Fixed ISO strings
+  (`'2026-04-20T08:00:00.000Z'`), or inject a clock.
+- Don't globally mock `fetch`. Inject a client factory or use MSW at
+  the test-entry level.
+- Coverage is advisory. Don't chase 100% on plumbing (steps that just
+  call a service).
+
+## E2E (Playwright)
+
+Selector preference, **in order**:
+
+1. `getByRole('...')` with an accessible name
+2. `getByLabel('...')` for form fields
+3. `getByTestId('...')` -- use the existing `data-testid="kpi-card-*"`,
+   `data-testid="sidebar-nav-*"` ids
+4. `getByText('...')` -- **only** when the text is part of the UX
+   contract (e.g. a heading)
+
+```ts
+// BAD -- breaks on copy tweaks
+await page.getByText('Load Board').click()
+
+// GOOD -- stable across copy changes
+await page.getByTestId('sidebar-nav-loads').click()
+```
+
+- Navigate via URL once routing is in place (`await page.goto('/calls')`).
+- `expect(...).toBeVisible()` over `toBeTruthy()`.
+
+## Don'ts
+
+- No duplicated pure logic in tests (import it from the module).
+- No real network in any `*.test.ts`.
+- No snapshot tests of business logic output -- snapshots are for
+  formatters / schema dumps, not for negotiation results.

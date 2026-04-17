@@ -1,0 +1,49 @@
+---
+description: FMCSA / HappyRobot external HTTP client conventions
+globs: apps/api/src/services/**/*.ts
+alwaysApply: false
+---
+
+# External service clients
+
+Third-party HTTP lives under `apps/api/src/services/`. Deep-dive:
+`.cursor/skills/external-services/SKILL.md`.
+
+## Non-negotiables
+
+- **Timeouts are required.** `signal: AbortSignal.timeout(ms)` on every
+  `fetch`. FMCSA = `10_000`, HappyRobot = `15_000`. No unbounded awaits.
+- **Retries only where safe.** FMCSA gets 3 attempts with linear backoff
+  (`1000 * (attempt + 1)`). Do not retry HappyRobot unless the call is
+  documented-idempotent (GET transcript is fine; POSTing anything is not).
+- **`404` is a value, `5xx` is an error.** Return `null` on 404 (cacheable
+  "not found"); throw on `!response.ok` otherwise.
+- **Parse with Zod before use.** Raw JSON flows through
+  `FMCSACarrierResponseSchema` / equivalent. Never read a field off a raw
+  `any` and never cast the response object.
+- **Secrets never appear in thrown messages or logs.** Build errors like
+  `` new Error(`FMCSA API returned ${response.status}`) `` -- status only,
+  not URL (URL carries `webKey`), not headers (Authorization).
+- **Config is the only env source.** Import from
+  [apps/api/src/config.ts](mdc:apps/api/src/config.ts). Never
+  `process.env.*` inside a service.
+
+## Structure
+
+Split pure logic (`evaluateEligibility`) from the network call
+(`fetchFromFMCSA`) so the pure part is unit-testable. Export the pure
+function from the service module -- don't force tests to duplicate it.
+
+## Caching
+
+Cache at the DB layer with a TTL (e.g. `CARRIER_CACHE_TTL_MS`) via a
+lookup-first pattern. Do **not** add a process-local `Map` for
+cross-request caching -- Motia workers restart and lose it; correctness
+depends on Convex being authoritative.
+
+## Error shape for callers
+
+Services throw plain `Error`. The calling Motia step is responsible for
+mapping failures into the wide-event `error` shape (`{type, message,
+code?, retriable?}`) and setting `failure_stage`. See
+`.cursor/rules/wide-event-logging.mdc`.

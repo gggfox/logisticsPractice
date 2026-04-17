@@ -1,0 +1,88 @@
+---
+description: Zod schema conventions for the API <-> Dashboard <-> Convex contract
+globs: packages/shared/src/schemas/**/*.ts
+alwaysApply: false
+---
+
+# Zod contracts (`@carrier-sales/shared`)
+
+These schemas are the single source of truth shared by the Motia API
+(`apps/api`), the Convex DB (`packages/convex`), and the Dashboard
+(`apps/dashboard`). One drift breaks three consumers. Deep-dive:
+`.cursor/skills/zod-contracts/SKILL.md`.
+
+## File shape
+
+Every `*.schema.ts` exports:
+
+1. The Zod schema (`FooSchema`)
+2. The inferred type with the matching name minus "Schema" (`type Foo`)
+3. Any request / response variants (`FooRequestSchema`, `FooResponseSchema`)
+
+Then re-export **explicitly** through
+[packages/shared/src/schemas/index.ts](mdc:packages/shared/src/schemas/index.ts)
+-- no `export *` barrel. Consumers import via the package root
+(`from '@carrier-sales/shared'`). Deep imports are not exposed.
+
+## Field rules
+
+- **Enums** come from `packages/shared/src/constants/index.ts`
+  (`EQUIPMENT_TYPES`, `LOAD_STATUSES`, `CALL_OUTCOMES`, `SENTIMENTS`). Use
+  `z.enum(CALL_OUTCOMES)`; never inline `z.enum(['booked', 'declined', ...])`.
+  Adding a value happens in the constants file only.
+- **Timestamps** = `z.string().datetime()`. Never `z.date()`, `z.number()`
+  (epoch), or free-form `z.string()`. Convex stores `v.string()` and external
+  APIs (HappyRobot, FMCSA) send ISO strings.
+- **IDs** = `z.string().min(1)` for required, `z.string().min(1).optional()`
+  for optional. `load_id`, `call_id`, `carrier_mc`, `mc_number`.
+- **Money / counts**: `z.number().positive()` for monetary amounts (rates,
+  weight, miles), `z.number().int().nonnegative()` for counts
+  (`negotiation_rounds`, `total_drivers`, `total`).
+- **Optional vs default**: use `.default('')` for string fields that are
+  always present in storage but may be empty; use `.optional()` for truly
+  absent fields. Match what the Convex `v.optional(...)` validator expects.
+
+## External API responses = separate schema
+
+External shapes (FMCSA, HappyRobot) change independently of internal shapes.
+Never merge them:
+
+```ts
+export const CarrierSchema = z.object({ /* internal */ })
+export const FMCSACarrierResponseSchema = z.object({ content: z.object({ carrier: z.object({ /* raw */ }) }) })
+```
+
+The Motia step or service is responsible for mapping external -> internal.
+
+## Adding a field (the three-step contract)
+
+A new field must be added in **all three** places in the same change or it
+silently drifts:
+
+1. Zod schema in `packages/shared/src/schemas/*.schema.ts` (+ re-export).
+2. Convex validator in
+   [packages/convex/convex/schema.ts](mdc:packages/convex/convex/schema.ts)
+   with matching `v.string() / v.number() / v.optional(...)`.
+3. If the field is returned by an HTTP step, extend its `responseSchema` (or
+   the shared schema it points at) -- the step's `asStepSchema(...)` reuses
+   the same Zod schema, so (1) covers this if you share the schema.
+
+Skipping (2) means Convex throws on insert. Skipping (1) means the API type
+says the field exists but clients get `undefined`.
+
+## Zod v3 <-> v4 bridge
+
+`@carrier-sales/shared` is on Zod v3; Motia is on Zod v4. The **only**
+allowed cast site is `asStepSchema` in
+[apps/api/src/lib/zod-schema.ts](mdc:apps/api/src/lib/zod-schema.ts). Never
+`as any`, never `as unknown as ...`, never duplicate the helper. Rationale
+in the helper's JSDoc.
+
+## Don'ts
+
+- `z.date()` -- storage is string.
+- `z.enum(['booked', ...])` inline -- use the constant.
+- `export *` from `schemas/index.ts` -- must be explicit to catch typos.
+- Deep import: `from '@carrier-sales/shared/schemas/load.schema'` -- not exposed.
+- Re-deriving types by hand (`type Load = { load_id: string; ... }`) -- use
+  `z.infer<typeof LoadSchema>`.

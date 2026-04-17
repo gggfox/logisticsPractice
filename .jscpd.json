@@ -1,0 +1,17 @@
+{
+  "threshold": 5,
+  "reporters": ["consoleFull"],
+  "ignore": [
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/.turbo/**",
+    "**/coverage/**",
+    "**/_generated/**",
+    "**/*.test.ts",
+    "**/*.spec.ts",
+    "**/playwright-report/**"
+  ],
+  "pattern": "**/*.{ts,tsx}",
+  "absolute": true,
+  "gitignore": true
+}

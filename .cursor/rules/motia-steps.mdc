@@ -1,0 +1,92 @@
+---
+description: Motia step authoring conventions (HTTP / queue / cron)
+globs: apps/api/src/steps/**/*.ts
+alwaysApply: false
+---
+
+# Motia step authoring
+
+Every file under `apps/api/src/steps/**` exports `config` + `handler` for a
+Motia step. Deep-dive: `.cursor/skills/motia-steps/SKILL.md`. Pairs with
+`.cursor/rules/wide-event-logging.mdc`.
+
+## Required shape
+
+```ts
+export const config = {
+  name: 'StepName',
+  triggers: [api('POST', '/api/v1/thing', { /* ... */ })],
+  flows: ['bridge-api'],
+} as const satisfies StepConfig
+
+export const handler: Handlers<typeof config> = async (req, ctx) => { /* ... */ }
+```
+
+- Always `as const satisfies StepConfig` on `config`. Never leave it untyped.
+- Always `Handlers<typeof config>` on `handler`. Never `async (req, ctx) =>`.
+- `flows` must be one of the existing groups: `bridge-api`,
+  `webhook-processing`, `metrics`. Invent a new flow only for a new subsystem.
+
+## Middleware order
+
+HTTP (bridge) step triggers:
+
+```ts
+middleware: [rateLimiter, apiKeyAuth, wideEventMiddleware]
+```
+
+Webhook step triggers (no rate limiter, webhooks are signature-gated):
+
+```ts
+middleware: [apiKeyAuth, wideEventMiddleware]
+```
+
+`wideEventMiddleware` is **always last** so it observes the final response.
+
+## Schemas
+
+- `bodySchema: SomeZodSchema` -- validated automatically by Motia. Re-parse
+  with `safeParse(req.body)` only when you need the typed value for branching.
+- `responseSchema: { 200: asStepSchema(SomeSchema) }` -- **always** wrap in
+  `asStepSchema` from `apps/api/src/lib/zod-schema.ts`. Never pass a raw Zod
+  schema; the v3/v4 bridge will fail typecheck. Never `as any`.
+
+## Response bodies
+
+Non-2xx bodies must be `{ error, message, statusCode }`:
+
+```ts
+return {
+  status: 404,
+  body: { error: 'Not Found', message: `Load ${load_id} not found`, statusCode: 404 },
+}
+```
+
+Never `throw` for expected 4xx. Throw is for truly unexpected state; the
+`catch` block maps to 500.
+
+## Observability
+
+- HTTP step: call `enrichWideEvent(ctx, { ... })` at every meaningful branch.
+- Queue / cron step: wrap the whole handler in
+  `withWideEvent('StepName', ctx, async (enrich) => { ... })` -- never mix the
+  two patterns.
+- In every `catch`, add `enrichWideEvent(ctx, { failure_stage: '<stage>' })`
+  before returning 500 / rethrowing.
+- Metric attributes stay LOW cardinality (`outcome`, `result`, `round` as
+  string). High-cardinality fields (`call_id`, `load_id`, `mc_number`) go on
+  the wide event. See `wide-event-logging.mdc`.
+
+## Enqueues
+
+- Declare every topic in `config.enqueues: ['topic.name']` **before** calling
+  `ctx.enqueue({ topic, data })`. An undeclared topic is a type error.
+- Queue step input is validated by `queue('topic.name', { input: ZodSchema })`.
+
+## Don'ts
+
+- No raw `console.log` -- use `ctx.logger`.
+- No second canonical `logger.info` line per request -- the wide event is the
+  canonical log.
+- No `z.date()` anywhere; timestamps are ISO `string`.
+- No raw Zod schema passed to `responseSchema`.

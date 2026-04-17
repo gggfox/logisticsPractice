@@ -1,0 +1,78 @@
+---
+description: TypeScript strictness, biome lint escalations, and branded IDs
+globs: **/*.ts,**/*.tsx
+alwaysApply: false
+---
+
+# TypeScript strictness
+
+`tsconfig.base.json` has `strict`, `noUncheckedIndexedAccess`,
+`exactOptionalPropertyTypes`, `noImplicitReturns`. Write code that
+lives comfortably under those; don't fight them with casts. Deep-dive:
+`.cursor/skills/typescript-strictness/SKILL.md`.
+
+## Biome escalations (treat as errors in review)
+
+- `suspicious.noExplicitAny` -- no `any`. Use `z.unknown()` + parse
+  for genuinely untyped input.
+- `style.noNonNullAssertion` -- no trailing `!`. Narrow with a guard
+  or use `??`.
+
+## Typing shape
+
+- `as const satisfies T` for configs and lookup tables (see every
+  `StepConfig`, `config.ts`). Prefer `satisfies` over `as`.
+- Discriminated unions over nullable pairs:
+
+```ts
+// GOOD
+type Result = { ok: true; data: Foo } | { ok: false; error: string }
+
+// BAD
+type Result = { data?: Foo; error?: string }
+```
+
+- Under `noUncheckedIndexedAccess`, every array / record access is
+  `T | undefined`. Narrow explicitly; don't `arr[0]!`.
+- Under `exactOptionalPropertyTypes`, `{ foo?: string }` is **not**
+  the same as `{ foo: string | undefined }`. Don't assign `undefined`
+  to satisfy the former.
+
+## Motia handler typing
+
+`req.pathParams` / `req.queryParams` are untyped. Wrap with a Zod
+helper instead of casting inline:
+
+```ts
+// BAD
+const { load_id } = req.pathParams as { load_id: string }
+
+// GOOD (once the helper exists in apps/api/src/lib/):
+const { load_id } = parsePathParams(req, z.object({ load_id: z.string().min(1) }))
+```
+
+See the skill for the helper recipe.
+
+## Branded IDs (gradual adoption)
+
+Introduce in `packages/shared/src/types/index.ts`:
+
+```ts
+export type LoadId = string & { readonly __brand: 'LoadId' }
+export type CallId = string & { readonly __brand: 'CallId' }
+export type McNumber = string & { readonly __brand: 'McNumber' }
+
+export const toLoadId = (s: string): LoadId => s as LoadId
+```
+
+Brands prevent `getLoad(call_id)` from typechecking. Adopt at
+boundaries first (Zod parse output, Convex return types), then push
+inward. Don't mass-migrate in one PR.
+
+## Don'ts
+
+- `as any`, `as unknown as T` (except the single audited
+  `asStepSchema` bridge for Zod v3<->v4).
+- `any` in test fixtures.
+- Hand-derived types when the Zod schema exists:
+  `type Load = z.infer<typeof LoadSchema>` -- don't retype by hand.

@@ -1,0 +1,72 @@
+---
+description: OTel metric naming, attribute cardinality, and when to prefer the wide event
+globs: apps/api/src/observability/metrics.ts,apps/api/src/steps/**/*.ts
+alwaysApply: false
+---
+
+# OTel metrics
+
+Custom meters under `carrier_sales.*` are exported to SigNoz. Deep-dive:
+`.cursor/skills/otel-metrics/SKILL.md`. Pairs with
+`.cursor/rules/wide-event-logging.mdc`.
+
+## Naming
+
+`carrier_sales.<domain>.<event>`, snake_case, singular noun. Current set:
+
+- `carrier_sales.negotiation.rounds` (histogram, unit `rounds`)
+- `carrier_sales.booking.outcome` (counter)
+- `carrier_sales.carrier.verification` (counter)
+- `carrier_sales.webhook.received` (counter)
+- `carrier_sales.sentiment` (counter)
+- `carrier_sales.call.outcome` (counter)
+- `carrier_sales.load.search.results` (histogram, unit `loads`)
+
+Adding one = adding to
+[metrics.ts](mdc:apps/api/src/observability/metrics.ts) with an
+explicit `description`. Histograms also get `unit`.
+
+## Attribute keys (closed list)
+
+Allowed: `outcome`, `result`, `sentiment`, `round`, `signature_valid`,
+`status`, `eligible`. Adding a key is a design decision -- discuss
+before merging.
+
+## Attribute values (LOW cardinality only)
+
+Allowed:
+
+- Booleans as strings: `'true'`, `'false'`.
+- Enums from `packages/shared/src/constants` (`CALL_OUTCOMES`,
+  `SENTIMENTS`, `LOAD_STATUSES`).
+- Small ints stringified: `round: String(n)` where `n <= 10`.
+
+Forbidden -- these belong on the **wide event**, not metric attributes:
+
+- `call_id`, `load_id`, `mc_number`, `dot_number`
+- `user_agent`, `ip`, `api_key_hash`
+- Raw numbers: rates, weights, miles, durations
+- Free-form strings: messages, error text, city names
+
+## Counting rules
+
+- One `.add(1)` per outcome branch. Do **not** place `.add(1)` in both
+  a success path and a `finally` -- you'll double-count.
+- Histograms for latencies, rounds, counts-per-event. Not for money
+  (monetary aggregates go in Convex `metrics` + the aggregate cron,
+  not OTel).
+
+## Examples
+
+```ts
+// GOOD
+bookingOutcomeCounter.add(1, { result: 'accepted', round: String(round) })
+negotiationRoundsHistogram.record(round)
+webhookReceivedCounter.add(1, { signature_valid: 'true', status: parsed.data.status })
+
+// BAD -- high-cardinality attrs
+bookingOutcomeCounter.add(1, { call_id, load_id })
+
+// BAD -- raw number as attr
+negotiationRoundsHistogram.record(round, { final_rate: String(rate) })
+```

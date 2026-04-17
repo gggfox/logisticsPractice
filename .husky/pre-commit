@@ -1,1 +1,2 @@
 pnpm lint-staged
+pnpm knip --no-exit-code

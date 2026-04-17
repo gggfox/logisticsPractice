@@ -11,17 +11,26 @@
     "test:e2e": "turbo run test:e2e",
     "format": "biome format --write .",
     "check": "biome check --write .",
+    "analyze:complexity": "code-complexity . --limit 20 --sort score --filter '**/*,!**/_generated/**,!**/node_modules/**,!**/dist/**,!**/.turbo/**,!**/coverage/**,!pnpm-lock.yaml,!**/*.md,!**/*.yml,!**/*.yaml,!**/*.json,!**/*.http,!**/*.lock'",
+    "analyze:duplication": "jscpd",
+    "analyze:deadcode": "knip",
+    "analyze": "pnpm analyze:complexity && pnpm analyze:duplication && pnpm analyze:deadcode",
     "prepare": "husky"
   },
   "devDependencies": {
-    "@vitest/coverage-v8": "^3.0.0",
     "@biomejs/biome": "^1.9.0",
+    "@vitest/coverage-v8": "^3.0.0",
+    "code-complexity": "^4.4.4",
     "husky": "^9.0.0",
+    "jscpd": "^4.0.9",
+    "knip": "^6.4.1",
     "lint-staged": "^15.0.0",
     "turbo": "^2.0.0",
     "typescript": "^5.7.0"
   },
   "lint-staged": {
-    "*.{ts,tsx,js,jsx,json}": ["biome check --write --no-errors-on-unmatched"]
+    "*.{ts,tsx,js,jsx,json}": [
+      "biome check --write --no-errors-on-unmatched"
+    ]
   }
 }

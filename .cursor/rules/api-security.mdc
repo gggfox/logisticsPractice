@@ -1,0 +1,88 @@
+---
+description: API key auth, rate limiting, and webhook signature verification
+globs: apps/api/src/middleware/**/*.ts,apps/api/src/steps/webhooks/**/*.ts
+alwaysApply: false
+---
+
+# API security
+
+Middleware order, signature verification, and secret handling for the
+Bridge API and webhook endpoints. Deep-dive:
+`.cursor/skills/api-security/SKILL.md`.
+
+## Middleware order (fixed)
+
+HTTP bridge:
+
+```ts
+middleware: [rateLimiter, apiKeyAuth, wideEventMiddleware]
+```
+
+Webhook (signature-gated; no rate limit so the bridge can't DoS itself):
+
+```ts
+middleware: [apiKeyAuth, wideEventMiddleware]
+```
+
+`wideEventMiddleware` is **always last** (observes final response).
+`rateLimiter` runs before auth **on purpose** so unauth traffic still
+consumes budget. Do not reorder.
+
+## Webhook signatures
+
+```ts
+function verifyWebhookSignature(rawBody: string, signature: string | undefined): boolean {
+  if (!signature) return false
+  const expected = crypto.createHmac('sha256', config.bridge.webhookSecret).update(rawBody).digest('hex')
+  const sigBuf = Buffer.from(signature, 'hex')
+  const expBuf = Buffer.from(expected, 'hex')
+  // REQUIRED: length guard. timingSafeEqual throws on mismatched lengths.
+  if (sigBuf.length !== expBuf.length) return false
+  return crypto.timingSafeEqual(sigBuf, expBuf)
+}
+```
+
+- Always `crypto.timingSafeEqual` with **equal-length buffers**. A
+  length mismatch throws -- short-circuit first.
+- HMAC the **raw** request body, not `JSON.stringify(req.body)` (key
+  order is not preserved). Motia exposes the raw body; use it.
+- On `false`, return 401 with `{ error, message, statusCode }`. Emit
+  `signature_valid: false` on the wide event + bump
+  `webhookReceivedCounter` with `{ signature_valid: 'false' }`.
+
+## 401 responses
+
+```ts
+{ error: 'Unauthorized', message: 'Missing x-api-key header', statusCode: 401 }
+```
+
+- Same shape for "missing" and "invalid". Don't give an oracle ("valid
+  length but wrong"). The client only needs to know it's 401.
+
+## Secrets
+
+- All secrets come from
+  [apps/api/src/config.ts](mdc:apps/api/src/config.ts). **Never** read
+  `process.env.*` outside that file. A new secret = new `config.*`
+  entry + `maskSecret(...)` line in `printBootSummary`.
+- Never log, return, or echo: `x-api-key`, `Authorization`,
+  `WEBHOOK_SECRET`, `FMCSA_WEB_KEY`, bearer tokens, cookies.
+- For correlation, hash: `hashApiKey(key)` in
+  [wide-event.middleware.ts](mdc:apps/api/src/middleware/wide-event.middleware.ts)
+  (sha256, first 12 chars) -- already emitted as `api_key_hash`.
+
+## Rate limiter
+
+Key = `x-api-key` or `'anonymous'`. Do **not** key by IP alone (Traefik
+adds `x-forwarded-for`, which is client-controlled and spoofable).
+
+## Health bypass
+
+`apiKeyAuth` bypasses `/api/v1/health` explicitly:
+
+```ts
+if (ctx.trigger.path === '/api/v1/health') return next()
+```
+
+Any new bypass needs a comment naming the caller and the threat model.
+Never bypass based on `req.headers` alone.

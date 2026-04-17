@@ -1,0 +1,65 @@
+---
+description: TanStack Router conventions for the dashboard (post-migration)
+globs: apps/dashboard/src/**/*.tsx
+alwaysApply: false
+---
+
+# TanStack Router
+
+`@tanstack/react-router` is installed but the dashboard still
+navigates via `useState<Page>` in `App.tsx`. The migration playbook
+lives in `.cursor/skills/tanstack-router/migration.md`; once adopted,
+the rules below apply.
+
+## Route shape
+
+File-based routes under `apps/dashboard/src/routes/`:
+
+```
+routes/
+  __root.tsx
+  index.tsx
+  calls.tsx
+  loads.tsx
+  carriers.tsx
+  negotiations.tsx
+  live.tsx
+```
+
+Each leaf uses `createFileRoute`:
+
+```tsx
+export const Route = createFileRoute('/loads')({
+  component: lazy(() => import('../pages/LoadBoardPage').then(m => ({ default: m.LoadBoardPage }))),
+  validateSearch: LoadSearchParamsSchema.parse,
+})
+```
+
+## Search params
+
+`validateSearch` uses a Zod schema from `@carrier-sales/shared` where
+one applies (`LoadSearchParamsSchema` for `/loads`). Inline
+`z.object({...})` only for dashboard-local search keys.
+
+## Loaders
+
+- `loader` is for data that *must* be present before render. Kick off
+  Convex queries in parallel via `Promise.all`, not sequentially.
+- `beforeLoad` is for auth / feature flags only -- no data fetching.
+- Prefer Convex `useQuery` in the component over `loader` -- Convex's
+  reactive layer handles suspense + updates better than loader-return
+  snapshots.
+
+## Layout and code splitting
+
+- One `<Outlet>` per layout in `__root.tsx`. No page rendering via
+  `useState` anymore.
+- Each route component is the lazy boundary. Do not wrap individual
+  components below the route in `React.lazy`.
+- `<Link to="/loads">` for navigation, never `window.location` or
+  `history.push`.
+
+## E2E
+
+Playwright specs navigate by URL (`await page.goto('/loads')`), not by
+clicking sidebar text. See `.cursor/rules/testing.mdc`.
