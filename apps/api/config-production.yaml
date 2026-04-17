@@ -1,8 +1,13 @@
 # iii / Motia production config. Consumed by the `iii` binary in apps/api/Dockerfile.
-# Local dev still uses apps/api/motia.config.yaml via `motia dev`.
+# Local dev uses apps/api/config-dev.yaml.
+#
+# NOTE: We pin iii to 0.10.0 in the Dockerfile, which uses the
+# `modules:` + `class:` schema (long Rust-style paths). 0.11 renamed
+# this to `workers:` + `name:` with short IDs; do NOT migrate until
+# we bump the iii version (see .cursor/plans/fix-iii-motia-version-drift_5f1a3b86.plan.md).
 
-workers:
-  - name: iii-http
+modules:
+  - class: modules::api::RestApiModule
     config:
       port: ${HTTP_PORT:3111}
       host: 0.0.0.0
@@ -18,40 +23,40 @@ workers:
           - DELETE
           - OPTIONS
 
-  - name: iii-stream
+  - class: modules::stream::StreamModule
     config:
       port: ${STREAM_PORT:3112}
       host: 0.0.0.0
       adapter:
-        name: redis
+        class: modules::stream::adapters::RedisAdapter
         config:
           redis_url: ${REDIS_URL:redis://redis:6379}
 
-  - name: iii-state
+  - class: modules::state::StateModule
     config:
       adapter:
-        name: redis
+        class: modules::state::adapters::RedisAdapter
         config:
           redis_url: ${REDIS_URL:redis://redis:6379}
 
-  - name: iii-pubsub
+  - class: modules::pubsub::PubSubModule
     config:
       adapter:
-        name: redis
+        class: modules::pubsub::RedisAdapter
         config:
           redis_url: ${REDIS_URL:redis://redis:6379}
 
-  - name: iii-queue
+  - class: modules::queue::QueueModule
     config:
       adapter:
-        name: builtin
+        class: modules::queue::BuiltinQueueAdapter
 
-  - name: iii-cron
+  - class: modules::cron::CronModule
     config:
       adapter:
-        name: kv
+        class: modules::cron::KvCronAdapter
 
-  - name: iii-observability
+  - class: modules::observability::OtelModule
     config:
       enabled: ${OTEL_ENABLED:true}
       service_name: ${OTEL_SERVICE_NAME:carrier-sales-api}
@@ -60,18 +65,12 @@ workers:
       exporter: ${OTEL_EXPORTER_TYPE:otlp}
       endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://signoz-otel-collector:4317}
       sampling_ratio: 1.0
-      memory_max_spans: ${OTEL_MEMORY_MAX_SPANS:10000}
       metrics_enabled: true
       metrics_exporter: ${OTEL_METRICS_EXPORTER:otlp}
-      metrics_retention_seconds: 3600
-      metrics_max_count: 10000
       logs_enabled: ${OTEL_LOGS_ENABLED:true}
       logs_exporter: ${OTEL_LOGS_EXPORTER:otlp}
-      logs_max_count: ${OTEL_LOGS_MAX_COUNT:1000}
-      logs_retention_seconds: ${OTEL_LOGS_RETENTION_SECONDS:3600}
-      logs_sampling_ratio: ${OTEL_LOGS_SAMPLING_RATIO:1.0}
 
-  - name: iii-exec
+  - class: modules::shell::ExecModule
     config:
       exec:
         - bun run --enable-source-maps dist/index-production.js
