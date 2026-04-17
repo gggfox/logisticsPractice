@@ -86,8 +86,16 @@ Pushes to `main` trigger Dokploy's GitHub webhook, which rebuilds and redeploys 
 
 See the full step-by-step walkthrough in [docs/dokploy-setup.md](docs/dokploy-setup.md).
 
+## Observability
+
+Traces, metrics, and wide-event logs ship over OTLP to a self-hosted SigNoz
+instance deployed from [`infra/signoz/docker-compose.yml`](infra/signoz/docker-compose.yml).
+See [docs/observability.md](docs/observability.md) for the wide-event contract,
+field catalog, and instructions for adding a new domain metric.
+
 ## Documentation
 
 - [Dokploy Setup Guide](docs/dokploy-setup.md)
+- [Observability & Wide-Event Logging](docs/observability.md)
 - [Voice AI Setup Guide](docs/happyrobot-setup.md)
 - [Acme Logistics Solution Document](docs/acme-logistics-solution.md)

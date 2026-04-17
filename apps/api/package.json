@@ -12,7 +12,9 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@carrier-sales/convex": "workspace:*",
     "@carrier-sales/shared": "workspace:*",
+    "@opentelemetry/api": "^1.9.1",
     "convex": "^1.17.0",
     "motia": "^1.0.0",
     "zod": "^3.24.0"

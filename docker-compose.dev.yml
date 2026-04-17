@@ -4,7 +4,8 @@ services:
       context: .
       dockerfile: apps/api/Dockerfile
     ports:
-      - "4000:4000"
+      - "3111:3111"
+      - "3112:3112"
     env_file: .env
     restart: unless-stopped
 

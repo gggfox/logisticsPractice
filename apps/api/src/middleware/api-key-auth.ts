@@ -1,28 +1,35 @@
-import type { HttpMiddleware } from 'motia'
+import type { ApiMiddleware } from 'motia'
+import { config } from '../config.js'
 
-export const apiKeyAuth: HttpMiddleware = async (req, res, next) => {
-  if (req.path === '/health' || req.path === '/api/v1/health') {
+export const apiKeyAuth: ApiMiddleware = async (req, ctx, next) => {
+  if (ctx.trigger.path === '/api/v1/health') {
     return next()
   }
 
   const apiKey = req.headers['x-api-key']
 
   if (!apiKey) {
-    return res.status(401).json({
-      error: 'Unauthorized',
-      message: 'Missing x-api-key header',
-      statusCode: 401,
-    })
+    return {
+      status: 401,
+      body: {
+        error: 'Unauthorized',
+        message: 'Missing x-api-key header',
+        statusCode: 401,
+      },
+    }
   }
 
-  const validKeys = [process.env.BRIDGE_API_KEY, process.env.ADMIN_API_KEY].filter(Boolean)
+  const validKeys = [config.bridge.apiKey, config.bridge.adminKey]
 
   if (!validKeys.includes(apiKey as string)) {
-    return res.status(401).json({
-      error: 'Unauthorized',
-      message: 'Invalid API key',
-      statusCode: 401,
-    })
+    return {
+      status: 401,
+      body: {
+        error: 'Unauthorized',
+        message: 'Invalid API key',
+        statusCode: 401,
+      },
+    }
   }
 
   return next()

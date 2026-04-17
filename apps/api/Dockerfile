@@ -15,29 +15,46 @@ COPY packages/shared/ packages/shared/
 COPY packages/convex/ packages/convex/
 COPY apps/api/ apps/api/
 
+# Build the shared package, then produce Motia's production bundle
+# (`apps/api/dist/index-production.js{,.map}`).
 RUN pnpm --filter @carrier-sales/shared build && \
-    pnpm --filter @carrier-sales/api build
+    pnpm --filter @carrier-sales/api exec motia build
 
-FROM node:22-alpine AS runner
+FROM debian:bookworm-slim AS iii-installer
 
-RUN addgroup -g 1001 -S appgroup && \
-    adduser -S appuser -u 1001 -G appgroup
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL https://install.iii.dev/iii/main/install.sh | sh
+
+FROM oven/bun:1.1-slim AS runner
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    wget ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN groupadd --system --gid 1001 appgroup && \
+    useradd --system --uid 1001 --gid appgroup --create-home appuser
 
 WORKDIR /app
 
-COPY --from=builder --chown=appuser:appgroup /app/node_modules ./node_modules
-COPY --from=builder --chown=appuser:appgroup /app/packages ./packages
-COPY --from=builder --chown=appuser:appgroup /app/apps/api ./apps/api
-COPY --from=builder --chown=appuser:appgroup /app/package.json ./
+COPY --from=iii-installer /root/.local/bin/iii /usr/local/bin/iii
+COPY --from=builder --chown=appuser:appgroup /app/apps/api/dist/index-production.js ./dist/
+COPY --from=builder --chown=appuser:appgroup /app/apps/api/dist/index-production.js.map ./dist/
+COPY --from=builder --chown=appuser:appgroup /app/apps/api/config-production.yaml ./config.yaml
+COPY --from=builder --chown=appuser:appgroup /app/apps/api/package.json ./package.json
 
 USER appuser
 
-EXPOSE 4000
+# 3111 = iii-http, 3112 = iii-stream
+EXPOSE 3111
+EXPOSE 3112
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:4000/api/v1/health || exit 1
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+  CMD wget --no-verbose --tries=1 --spider http://localhost:3111/api/v1/health || exit 1
 
-CMD ["node", "node_modules/.bin/motia", "start"]
+CMD ["iii", "--config", "config.yaml"]
 
 LABEL org.opencontainers.image.title="Carrier Sales API" \
       org.opencontainers.image.description="Motia-powered Bridge API for HappyRobot carrier sales automation"
