@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
-    "dev": "motia dev",
+    "dev": "dotenv -e ../../.env -- concurrently --kill-others-on-fail -n motia,iii -c cyan,magenta \"motia dev\" \"wait-on dist/index-dev.js && iii --config config-dev.yaml\"",
     "start": "motia start",
     "typecheck": "tsc --noEmit",
     "lint": "biome check src/",
@@ -16,11 +16,14 @@
     "@carrier-sales/shared": "workspace:*",
     "@opentelemetry/api": "^1.9.1",
     "convex": "^1.17.0",
-    "motia": "^1.0.0",
+    "motia": "1.0.4-rc.1",
     "zod": "^3.24.0"
   },
   "devDependencies": {
+    "concurrently": "^9.2.1",
+    "dotenv-cli": "^11.0.0",
     "typescript": "^5.7.0",
-    "vitest": "^3.0.0"
+    "vitest": "^3.0.0",
+    "wait-on": "^9.0.5"
   }
 }
