@@ -27,6 +27,10 @@ import Fastify, { type FastifyError } from 'fastify'
 import rawBody from 'fastify-raw-body'
 import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod'
 import { config } from './config.js'
+import {
+  startAggregateMetricsCron,
+  stopAggregateMetricsCron,
+} from './cron/aggregate-metrics.cron.js'
 import { logger } from './logger.js'
 import apiKeyAuth from './plugins/api-key-auth.js'
 import rateLimiter from './plugins/rate-limiter.js'
@@ -34,6 +38,7 @@ import securityHeaders from './plugins/security-headers.js'
 import wideEvent from './plugins/wide-event.js'
 import { closeAllQueues, closeRedisConnection } from './queues/index.js'
 import routes from './routes/index.js'
+import { startWorkers, stopWorkers } from './workers/index.js'
 
 export async function buildServer() {
   const app = Fastify({
@@ -105,6 +110,8 @@ async function shutdown(app: BuiltServer, signal: string): Promise<void> {
         logger.error({ err: hookErr }, 'shutdown hook failed'),
       )
     }
+    stopAggregateMetricsCron()
+    await stopWorkers()
     await closeAllQueues()
     await closeRedisConnection()
     await shutdownOtel()
@@ -124,6 +131,9 @@ async function main(): Promise<void> {
       void shutdown(app, signal)
     })
   }
+
+  startWorkers()
+  startAggregateMetricsCron()
 
   await app.listen({ port: config.http.port, host: '0.0.0.0' })
   logger.info({ port: config.http.port }, 'api: listening')
