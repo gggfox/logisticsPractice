@@ -33,7 +33,7 @@ import rateLimiter from './plugins/rate-limiter.js'
 import securityHeaders from './plugins/security-headers.js'
 import wideEvent from './plugins/wide-event.js'
 import { closeAllQueues, closeRedisConnection } from './queues/index.js'
-import healthCheckRoute from './routes/internal/health-check.js'
+import routes from './routes/index.js'
 
 export async function buildServer() {
   const app = Fastify({
@@ -69,7 +69,7 @@ export async function buildServer() {
   await app.register(apiKeyAuth)
   await app.register(wideEvent)
 
-  await app.register(healthCheckRoute)
+  await app.register(routes)
 
   app.setErrorHandler((err: FastifyError, _req, reply) => {
     // Fastify's default handler logs at error level with statusCode; we

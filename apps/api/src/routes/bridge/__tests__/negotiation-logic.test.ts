@@ -1,11 +1,6 @@
 import { MAX_NEGOTIATION_ROUNDS, OFFER_ACCEPT_MARGIN_PERCENT } from '@carrier-sales/shared'
 import { describe, expect, it } from 'vitest'
-
-function calculateCounterOffer(loadboardRate: number, offeredRate: number, round: number): number {
-  const gap = loadboardRate - offeredRate
-  const concessionFactor = 0.3 + round * 0.15
-  return Math.round(loadboardRate - gap * concessionFactor)
-}
+import { calculateCounterOffer } from '../log-offer.js'
 
 function isAcceptable(offeredRate: number, loadboardRate: number): boolean {
   const minAcceptable = loadboardRate * (1 - OFFER_ACCEPT_MARGIN_PERCENT / 100)
