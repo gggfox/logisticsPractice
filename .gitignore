@@ -9,8 +9,8 @@ coverage/
 .env.local
 .env.production
 
-# Convex
-packages/convex/convex/_generated/
+# Convex - generated files are committed so Docker builds work without a Convex deployment.
+# Regenerate with `pnpm --filter @carrier-sales/convex dev:codegen`.
 
 # Vite
 apps/dashboard/.vite/

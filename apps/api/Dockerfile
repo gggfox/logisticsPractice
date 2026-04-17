@@ -26,7 +26,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
-RUN curl -fsSL https://install.iii.dev/iii/main/install.sh | sh
+RUN curl -fsSL https://install.iii.dev/iii/main/install.sh | VERSION=0.10.0 sh
 
 FROM oven/bun:1.1-slim AS runner
 
