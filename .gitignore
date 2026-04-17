@@ -22,3 +22,6 @@ apps/dashboard/playwright-report/
 # OS
 .DS_Store
 Thumbs.db
+
+# Secrets
+*.secret.*
