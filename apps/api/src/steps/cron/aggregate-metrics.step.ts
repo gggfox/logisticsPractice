@@ -1,4 +1,5 @@
 import { type Handlers, type StepConfig, cron } from 'motia'
+import { withWideEvent } from '../../observability/wide-event.js'
 import { convexService } from '../../services/convex.service.js'
 
 export const config = {
@@ -94,39 +95,43 @@ async function computeTopLanes(
     .slice(0, 5)
 }
 
-export const handler: Handlers<typeof config> = {
-  async cron(_: unknown, { logger }) {
-    logger.info('Starting hourly metrics aggregation')
+export const handler: Handlers<typeof config> = async (_, ctx) =>
+  withWideEvent('AggregateMetrics', ctx, async (enrich) => {
+    const calls: CallRecord[] = await convexService.calls.getAll()
 
-    try {
-      const calls = await convexService.calls.getAll()
+    const totalCalls = calls.length
+    const bookedCalls = calls.filter((c) => c.outcome === 'booked')
+    const bookingRate = totalCalls > 0 ? bookedCalls.length / totalCalls : 0
+    const avgNegotiationRounds =
+      totalCalls > 0 ? calls.reduce((sum, c) => sum + c.negotiation_rounds, 0) / totalCalls : 0
 
-      const totalCalls = calls.length
-      const bookedCalls = calls.filter((c) => c.outcome === 'booked')
-      const bookingRate = totalCalls > 0 ? bookedCalls.length / totalCalls : 0
-      const avgNegotiationRounds =
-        totalCalls > 0 ? calls.reduce((sum, c) => sum + c.negotiation_rounds, 0) / totalCalls : 0
+    const avgDiscountPercent = await computeAvgDiscountPercent(calls)
+    const { sentimentDistribution, outcomeDistribution } = computeDistributions(calls)
+    const topLanes = await computeTopLanes(calls)
+    const revenueBooked = bookedCalls.reduce((sum, c) => sum + (c.final_rate ?? 0), 0)
 
-      const avgDiscountPercent = await computeAvgDiscountPercent(calls)
-      const { sentimentDistribution, outcomeDistribution } = computeDistributions(calls)
-      const topLanes = await computeTopLanes(calls)
-      const revenueBooked = bookedCalls.reduce((sum, c) => sum + (c.final_rate ?? 0), 0)
+    await convexService.metrics.write({
+      timestamp: new Date().toISOString(),
+      total_calls: totalCalls,
+      booking_rate: bookingRate,
+      avg_negotiation_rounds: avgNegotiationRounds,
+      avg_discount_percent: avgDiscountPercent,
+      sentiment_distribution: sentimentDistribution,
+      outcome_distribution: outcomeDistribution,
+      top_lanes: topLanes,
+      revenue_booked: revenueBooked,
+    })
 
-      await convexService.metrics.write({
-        timestamp: new Date().toISOString(),
-        total_calls: totalCalls,
-        booking_rate: bookingRate,
-        avg_negotiation_rounds: avgNegotiationRounds,
-        avg_discount_percent: avgDiscountPercent,
-        sentiment_distribution: sentimentDistribution,
-        outcome_distribution: outcomeDistribution,
-        top_lanes: topLanes,
-        revenue_booked: revenueBooked,
-      })
-
-      logger.info('Metrics aggregation complete', { totalCalls, bookingRate, revenueBooked })
-    } catch (error) {
-      logger.error('Metrics aggregation failed', { error })
-    }
-  },
-}
+    const [topLane] = topLanes
+    enrich({
+      total_calls: totalCalls,
+      booked_calls: bookedCalls.length,
+      booking_rate: bookingRate,
+      avg_negotiation_rounds: avgNegotiationRounds,
+      avg_discount_percent: avgDiscountPercent,
+      revenue_booked: revenueBooked,
+      top_lane_origin: topLane?.origin,
+      top_lane_destination: topLane?.destination,
+      top_lane_count: topLane?.count,
+    })
+  })

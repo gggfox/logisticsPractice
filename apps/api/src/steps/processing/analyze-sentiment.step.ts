@@ -1,17 +1,22 @@
 import type { Sentiment } from '@carrier-sales/shared'
 import { type Handlers, type StepConfig, queue } from 'motia'
 import { z } from 'zod'
+import { sentimentCounter } from '../../observability/metrics.js'
+import { withWideEvent } from '../../observability/wide-event.js'
 import { convexService } from '../../services/convex.service.js'
+
+const InputSchema = z.object({
+  call_id: z.string(),
+  transcript: z.string().optional(),
+})
+type Input = z.infer<typeof InputSchema>
 
 export const config = {
   name: 'AnalyzeSentiment',
   description: 'Analyze carrier sentiment from call transcript',
   triggers: [
     queue('call.completed', {
-      input: z.object({
-        call_id: z.string(),
-        transcript: z.string().optional(),
-      }),
+      input: InputSchema,
     }),
   ],
   flows: ['webhook-processing'],
@@ -88,14 +93,19 @@ function analyzeSentiment(transcript: string): { sentiment: Sentiment; confidenc
   }
 }
 
-export const handler: Handlers<typeof config> = {
-  async queue(data, { logger }) {
+export const handler: Handlers<typeof config> = async (input, ctx) =>
+  withWideEvent('AnalyzeSentiment', ctx, async (enrich) => {
+    const data = input as Input
+    enrich({
+      call_id: data.call_id,
+      had_transcript: Boolean(data.transcript),
+      transcript_length: data.transcript?.length ?? 0,
+    })
+
     if (!data.transcript) {
-      logger.info('No transcript for sentiment analysis', { call_id: data.call_id })
+      enrich({ skipped: true, skip_reason: 'no_transcript' })
       return
     }
-
-    logger.info('Analyzing sentiment', { call_id: data.call_id })
 
     const { sentiment, confidence } = analyzeSentiment(data.transcript)
 
@@ -105,6 +115,6 @@ export const handler: Handlers<typeof config> = {
       sentiment,
     })
 
-    logger.info('Sentiment analyzed', { call_id: data.call_id, sentiment, confidence })
-  },
-}
+    sentimentCounter.add(1, { sentiment })
+    enrich({ sentiment, confidence })
+  })

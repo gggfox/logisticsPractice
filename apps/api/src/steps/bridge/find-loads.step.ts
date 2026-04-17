@@ -1,15 +1,18 @@
 import { LoadResponseSchema, LoadSearchParamsSchema } from '@carrier-sales/shared'
-import { http, type Handlers, type StepConfig } from 'motia'
-import { z } from 'zod'
+import { type Handlers, type StepConfig, api } from 'motia'
+import { asStepSchema } from '../../lib/zod-schema.js'
 import { apiKeyAuth } from '../../middleware/api-key-auth.js'
 import { rateLimiter } from '../../middleware/rate-limiter.js'
+import { wideEventMiddleware } from '../../middleware/wide-event.middleware.js'
+import { loadSearchResultsHistogram } from '../../observability/metrics.js'
+import { enrichWideEvent } from '../../observability/wide-event-store.js'
 import { convexService } from '../../services/convex.service.js'
 
 export const config = {
   name: 'FindLoads',
   description: 'Search available loads by origin, destination, equipment type',
   triggers: [
-    http('GET', '/api/v1/loads', {
+    api('GET', '/api/v1/loads', {
       queryParams: [
         { name: 'origin', description: 'Origin city/state' },
         { name: 'destination', description: 'Destination city/state' },
@@ -17,42 +20,60 @@ export const config = {
         { name: 'pickup_date', description: 'Pickup date filter (YYYY-MM-DD)' },
       ],
       responseSchema: {
-        200: LoadResponseSchema,
+        200: asStepSchema(LoadResponseSchema),
       },
-      middleware: [rateLimiter, apiKeyAuth],
+      middleware: [rateLimiter, apiKeyAuth, wideEventMiddleware],
     }),
   ],
   flows: ['bridge-api'],
 } as const satisfies StepConfig
 
-export const handler: Handlers<typeof config> = {
-  async api(req, res, { logger }) {
-    try {
-      const params = LoadSearchParamsSchema.safeParse(req.query)
-      if (!params.success) {
-        return res.status(400).json({
+export const handler: Handlers<typeof config> = async (req, ctx) => {
+  try {
+    const params = LoadSearchParamsSchema.safeParse(req.queryParams)
+    if (!params.success) {
+      enrichWideEvent(ctx, { validation_error: params.error.message })
+      return {
+        status: 400,
+        body: {
           error: 'Bad Request',
           message: params.error.message,
           statusCode: 400,
-        })
+        },
       }
+    }
 
-      logger.info('Searching loads', { params: params.data })
+    enrichWideEvent(ctx, {
+      origin: params.data.origin,
+      destination: params.data.destination,
+      equipment_type: params.data.equipment_type,
+      pickup_date: params.data.pickup_date,
+    })
 
-      const loads = await convexService.loads.search({
-        origin: params.data.origin,
-        destination: params.data.destination,
-        equipment_type: params.data.equipment_type,
-      })
+    const loads = await convexService.loads.search({
+      origin: params.data.origin,
+      destination: params.data.destination,
+      equipment_type: params.data.equipment_type,
+    })
 
-      return res.status(200).json({ loads, total: loads.length })
-    } catch (error) {
-      logger.error('Failed to search loads', { error })
-      return res.status(500).json({
+    loadSearchResultsHistogram.record(loads.length, {
+      has_origin: String(Boolean(params.data.origin)),
+      has_destination: String(Boolean(params.data.destination)),
+      equipment_type: params.data.equipment_type ?? 'any',
+    })
+    enrichWideEvent(ctx, { result_count: loads.length })
+
+    return { status: 200, body: { loads, total: loads.length } }
+  } catch (error) {
+    enrichWideEvent(ctx, { failure_stage: 'convex_search' })
+    ctx.logger.error('Failed to search loads', { error })
+    return {
+      status: 500,
+      body: {
         error: 'Internal Server Error',
         message: 'Failed to search loads',
         statusCode: 500,
-      })
+      },
     }
-  },
+  }
 }

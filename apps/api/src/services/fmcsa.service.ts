@@ -3,18 +3,13 @@ import {
   type CarrierVerificationResponse,
   FMCSACarrierResponseSchema,
 } from '@carrier-sales/shared'
+import { config } from '../config.js'
 import { convexService } from './convex.service.js'
 
 const FMCSA_BASE_URL = 'https://mobile.fmcsa.dot.gov/qc/services/carriers'
 
-function getFmcsaWebKey(): string {
-  const key = process.env.FMCSA_WEB_KEY
-  if (!key) throw new Error('FMCSA_WEB_KEY environment variable is required')
-  return key
-}
-
 async function fetchFromFMCSA(mcNumber: string) {
-  const url = `${FMCSA_BASE_URL}/${mcNumber}?webKey=${getFmcsaWebKey()}`
+  const url = `${FMCSA_BASE_URL}/${mcNumber}?webKey=${config.fmcsa.webKey}`
 
   let lastError: Error | null = null
   for (let attempt = 0; attempt < 3; attempt++) {

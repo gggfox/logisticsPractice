@@ -1,16 +1,11 @@
-const getBaseUrl = () => process.env.HAPPYROBOT_BASE_URL ?? 'https://api.happyrobot.ai'
-const getApiKey = () => {
-  const key = process.env.HAPPYROBOT_API_KEY
-  if (!key) throw new Error('HAPPYROBOT_API_KEY environment variable is required')
-  return key
-}
+import { config } from '../config.js'
 
 async function happyrobotFetch(path: string, options: RequestInit = {}) {
-  const response = await fetch(`${getBaseUrl()}${path}`, {
+  const response = await fetch(`${config.happyrobot.baseUrl}${path}`, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${getApiKey()}`,
+      Authorization: `Bearer ${config.happyrobot.apiKey}`,
       ...options.headers,
     },
     signal: AbortSignal.timeout(15_000),
@@ -26,7 +21,10 @@ async function happyrobotFetch(path: string, options: RequestInit = {}) {
 export async function getCallTranscript(
   callId: string,
 ): Promise<{ transcript: string; speakers: Array<{ role: string; text: string }> }> {
-  const data = await happyrobotFetch(`/api/v1/calls/${callId}/transcript`)
+  const data = (await happyrobotFetch(`/api/v1/calls/${callId}/transcript`)) as {
+    transcript?: string
+    speakers?: Array<{ role: string; text: string }>
+  }
 
   return {
     transcript: data.transcript ?? '',

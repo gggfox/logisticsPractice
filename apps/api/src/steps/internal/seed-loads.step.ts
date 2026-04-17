@@ -1,44 +1,49 @@
-import { http, type Handlers, type StepConfig } from 'motia'
+import { type Handlers, type StepConfig, api } from 'motia'
 import { z } from 'zod'
+import { config as appConfig } from '../../config.js'
+import { wideEventMiddleware } from '../../middleware/wide-event.middleware.js'
+import { enrichWideEvent } from '../../observability/wide-event-store.js'
 import { convexService } from '../../services/convex.service.js'
 
 export const config = {
   name: 'SeedLoads',
   description: 'Seed database with demo load data (admin only)',
   triggers: [
-    http('POST', '/api/v1/admin/seed', {
+    api('POST', '/api/v1/admin/seed', {
       bodySchema: z.object({ count: z.number().int().positive().default(50) }).optional(),
+      middleware: [wideEventMiddleware],
     }),
   ],
   flows: ['internal-api'],
 } as const satisfies StepConfig
 
-export const handler: Handlers<typeof config> = {
-  async api(req, res, { logger }) {
-    const adminKey = process.env.ADMIN_API_KEY
-    const apiKey = req.headers['x-api-key']
+export const handler: Handlers<typeof config> = async (req, ctx) => {
+  const adminKey = appConfig.bridge.adminKey
+  const apiKey = req.headers['x-api-key']
+  const adminAuthOk = apiKey === adminKey
 
-    if (!adminKey || apiKey !== adminKey) {
-      return res.status(403).json({
+  enrichWideEvent(ctx, { admin_auth_ok: adminAuthOk })
+
+  if (!adminAuthOk) {
+    return {
+      status: 403,
+      body: {
         error: 'Forbidden',
         message: 'Admin access required',
         statusCode: 403,
-      })
+      },
     }
+  }
 
-    logger.info('Seeding load data')
+  const sampleLoads = generateSampleLoads()
 
-    // Seed is handled by the scripts/seed.ts file
-    // This endpoint triggers a simplified inline seed for quick demos
-    const sampleLoads = generateSampleLoads()
+  for (const load of sampleLoads) {
+    await convexService.loads.upsert(load)
+  }
 
-    for (const load of sampleLoads) {
-      await convexService.loads.upsert(load)
-    }
+  enrichWideEvent(ctx, { seeded_count: sampleLoads.length })
 
-    logger.info('Seed complete', { count: sampleLoads.length })
-    return res.status(200).json({ seeded: sampleLoads.length })
-  },
+  return { status: 200, body: { seeded: sampleLoads.length } }
 }
 
 function generateSampleLoads() {

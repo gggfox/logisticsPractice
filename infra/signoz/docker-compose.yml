@@ -1,0 +1,217 @@
+name: signoz
+
+x-common: &common
+  networks: [signoz-net]
+  restart: unless-stopped
+  logging:
+    options:
+      max-size: 50m
+      max-file: "3"
+
+services:
+  # One-shot: pull SigNoz's upstream config files (ClickHouse XMLs + OTel
+  # collector config + OpAMP config) into the shared `signoz-configs` volume.
+  # Keeps this repo small; the configs always match SIGNOZ_REF.
+  bootstrap-configs:
+    <<: *common
+    image: alpine/git:2.43.0
+    container_name: signoz-bootstrap-configs
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        if [ -f /configs/.bootstrapped ] && [ "$$(cat /configs/.bootstrapped)" = "$${SIGNOZ_REF}" ]; then
+          echo "Configs already bootstrapped at ref $${SIGNOZ_REF}"; exit 0
+        fi
+        rm -rf /configs/upstream
+        git clone --depth 1 --branch "$${SIGNOZ_REF}" \
+          https://github.com/SigNoz/signoz.git /configs/upstream
+        mkdir -p /configs/common /configs/docker
+        cp -r /configs/upstream/deploy/common/. /configs/common/
+        cp -r /configs/upstream/deploy/docker/. /configs/docker/
+        rm -rf /configs/upstream
+        echo "$${SIGNOZ_REF}" > /configs/.bootstrapped
+        echo "Bootstrapped SigNoz configs at ref $${SIGNOZ_REF}"
+    environment:
+      - SIGNOZ_REF=${SIGNOZ_REF:-v0.119.0}
+    volumes:
+      - signoz-configs:/configs
+    restart: on-failure
+
+  init-clickhouse:
+    <<: *common
+    image: clickhouse/clickhouse-server:25.5.6
+    container_name: signoz-init-clickhouse
+    depends_on:
+      bootstrap-configs:
+        condition: service_completed_successfully
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        set -eu
+        version="v0.0.1"
+        node_os=$$(uname -s | tr '[:upper:]' '[:lower:]')
+        node_arch=$$(uname -m | sed s/aarch64/arm64/ | sed s/x86_64/amd64/)
+        mkdir -p /var/lib/clickhouse/user_scripts
+        if [ -f /var/lib/clickhouse/user_scripts/histogramQuantile ]; then
+          echo "histogram-quantile already installed"; exit 0
+        fi
+        cd /tmp
+        wget -q -O histogram-quantile.tar.gz \
+          "https://github.com/SigNoz/signoz/releases/download/histogram-quantile%2F$${version}/histogram-quantile_$${node_os}_$${node_arch}.tar.gz"
+        tar -xzf histogram-quantile.tar.gz
+        mv histogram-quantile /var/lib/clickhouse/user_scripts/histogramQuantile
+        chmod +x /var/lib/clickhouse/user_scripts/histogramQuantile
+    restart: on-failure
+    volumes:
+      - clickhouse-user-scripts:/var/lib/clickhouse/user_scripts
+
+  zookeeper:
+    <<: *common
+    image: signoz/zookeeper:3.7.1
+    container_name: signoz-zookeeper
+    user: root
+    environment:
+      - ZOO_SERVER_ID=1
+      - ALLOW_ANONYMOUS_LOGIN=yes
+      - ZOO_AUTOPURGE_INTERVAL=1
+      - ZOO_ENABLE_PROMETHEUS_METRICS=yes
+      - ZOO_PROMETHEUS_METRICS_PORT_NUMBER=9141
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s -m 2 http://localhost:8080/commands/ruok | grep error | grep null"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    volumes:
+      - zookeeper:/bitnami/zookeeper
+
+  clickhouse:
+    <<: *common
+    image: clickhouse/clickhouse-server:25.5.6
+    container_name: signoz-clickhouse
+    tty: true
+    depends_on:
+      init-clickhouse:
+        condition: service_completed_successfully
+      zookeeper:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "0.0.0.0:8123/ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    ulimits:
+      nproc: 65535
+      nofile: { soft: 262144, hard: 262144 }
+    environment:
+      - CLICKHOUSE_SKIP_USER_SETUP=1
+    volumes:
+      - signoz-configs:/signoz-configs:ro
+      - clickhouse-data:/var/lib/clickhouse
+      - clickhouse-user-scripts:/var/lib/clickhouse/user_scripts
+    # Mount the upstream SigNoz ClickHouse configs as individual files via
+    # entrypoint wrapper so we don't need 4 separate bind mounts.
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        set -eu
+        cp /signoz-configs/common/clickhouse/config.xml /etc/clickhouse-server/config.xml
+        cp /signoz-configs/common/clickhouse/users.xml /etc/clickhouse-server/users.xml
+        cp /signoz-configs/common/clickhouse/custom-function.xml /etc/clickhouse-server/custom-function.xml
+        mkdir -p /etc/clickhouse-server/config.d
+        cp /signoz-configs/common/clickhouse/cluster.xml /etc/clickhouse-server/config.d/cluster.xml
+        exec /entrypoint.sh
+
+  signoz:
+    <<: *common
+    image: signoz/signoz:${SIGNOZ_VERSION:-v0.119.0}
+    container_name: signoz
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    ports:
+      - "${SIGNOZ_UI_PORT:-8080}:8080"
+    environment:
+      - SIGNOZ_ALERTMANAGER_PROVIDER=signoz
+      - SIGNOZ_TELEMETRYSTORE_CLICKHOUSE_DSN=tcp://clickhouse:9000
+      - SIGNOZ_SQLSTORE_SQLITE_PATH=/var/lib/signoz/signoz.db
+      - SIGNOZ_TOKENIZER_JWT_SECRET=${SIGNOZ_JWT_SECRET:-change-me-in-dokploy}
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "localhost:8080/api/v1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    volumes:
+      - signoz-sqlite:/var/lib/signoz
+
+  telemetrystore-migrator:
+    <<: *common
+    image: signoz/signoz-otel-collector:${SIGNOZ_OTELCOL_VERSION:-v0.144.2}
+    container_name: signoz-telemetrystore-migrator
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    environment:
+      - SIGNOZ_OTEL_COLLECTOR_CLICKHOUSE_DSN=tcp://clickhouse:9000
+      - SIGNOZ_OTEL_COLLECTOR_CLICKHOUSE_CLUSTER=cluster
+      - SIGNOZ_OTEL_COLLECTOR_CLICKHOUSE_REPLICATION=true
+      - SIGNOZ_OTEL_COLLECTOR_TIMEOUT=10m
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        /signoz-otel-collector migrate bootstrap &&
+        /signoz-otel-collector migrate sync up &&
+        /signoz-otel-collector migrate async up
+    restart: on-failure
+
+  otel-collector:
+    <<: *common
+    image: signoz/signoz-otel-collector:${SIGNOZ_OTELCOL_VERSION:-v0.144.2}
+    container_name: signoz-otel-collector
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      signoz:
+        condition: service_started
+      telemetrystore-migrator:
+        condition: service_completed_successfully
+    environment:
+      - OTEL_RESOURCE_ATTRIBUTES=host.name=signoz-host,os.type=linux
+      - LOW_CARDINAL_EXCEPTION_GROUPING=false
+      - SIGNOZ_OTEL_COLLECTOR_CLICKHOUSE_DSN=tcp://clickhouse:9000
+      - SIGNOZ_OTEL_COLLECTOR_CLICKHOUSE_CLUSTER=cluster
+      - SIGNOZ_OTEL_COLLECTOR_CLICKHOUSE_REPLICATION=true
+      - SIGNOZ_OTEL_COLLECTOR_TIMEOUT=10m
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        /signoz-otel-collector migrate sync check &&
+        /signoz-otel-collector \
+          --config=/signoz-configs/docker/otel-collector-config.yaml \
+          --manager-config=/signoz-configs/common/signoz/otel-collector-opamp-config.yaml \
+          --copy-path=/var/tmp/collector-config.yaml
+    volumes:
+      - signoz-configs:/signoz-configs:ro
+    # Only expose OTLP ports on the internal Docker network. The `api` container
+    # reaches the collector via the shared Dokploy network using the service DNS
+    # `signoz-otel-collector:4317`. Do NOT publish these to the host.
+
+networks:
+  signoz-net:
+    name: signoz-net
+    # Also attach this network from the `api` app in Dokploy so the API can push
+    # OTLP traffic to `signoz-otel-collector:4317`. In Dokploy, open the `api`
+    # application -> Advanced -> Networks -> add `signoz-net`.
+    driver: bridge
+
+volumes:
+  signoz-configs:
+    name: signoz-configs
+  clickhouse-data:
+    name: signoz-clickhouse
+  clickhouse-user-scripts:
+    name: signoz-clickhouse-user-scripts
+  signoz-sqlite:
+    name: signoz-sqlite
+  zookeeper:
+    name: signoz-zookeeper

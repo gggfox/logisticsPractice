@@ -1,14 +1,11 @@
 import { api } from '@carrier-sales/convex/convex/_generated/api'
 import { ConvexHttpClient } from 'convex/browser'
+import { config } from '../config.js'
 
 let client: ConvexHttpClient | null = null
 
 function getClient(): ConvexHttpClient {
-  if (!client) {
-    const url = process.env.CONVEX_URL
-    if (!url) throw new Error('CONVEX_URL environment variable is required')
-    client = new ConvexHttpClient(url)
-  }
+  client ??= new ConvexHttpClient(config.convex.url)
   return client
 }
 
