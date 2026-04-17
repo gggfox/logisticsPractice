@@ -47,6 +47,9 @@ ARG CONFIG_REV=2026-04-17-01
 RUN echo "config rev ${CONFIG_REV}" > /tmp/.config-rev
 COPY --from=builder --chown=appuser:appgroup /app/apps/api/config-production.yaml ./config.yaml
 COPY --from=builder --chown=appuser:appgroup /app/apps/api/package.json ./package.json
+RUN echo "---- config.yaml checksum ----" && \
+    head -5 config.yaml && \
+    sha256sum config.yaml
 
 USER appuser
 
