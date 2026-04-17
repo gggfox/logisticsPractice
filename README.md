@@ -1,6 +1,6 @@
 # Inbound Carrier Sales Automation
 
-Automated inbound carrier call handling for freight brokerages, powered by [HappyRobot](https://happyrobot.ai) voice AI.
+Automated inbound carrier call handling for freight brokerages, powered by a [Voice AI](https://happyrobot.ai).
 
 ## What It Does
 
@@ -9,12 +9,12 @@ Carriers call in to request loads. The AI agent verifies their MC number via FMC
 ## Architecture
 
 ```
-Carrier --> HappyRobot Voice AI --> Bridge API (Motia) --> Convex DB --> React Dashboard
+Carrier --> Voice AI --> Bridge API (Motia) --> Convex DB --> React Dashboard
                                         |
                                     FMCSA API
 ```
 
-- **Bridge API**: Motia-powered REST endpoints that HappyRobot calls during live conversations
+- **Bridge API**: Motia-powered REST endpoints that the Voice AI calls during live conversations
 - **Dashboard**: React + Tremor + Recharts with real-time Convex subscriptions
 - **Infrastructure**: Docker + Dokploy (Hostinger VPS) + GitHub Actions CI
 
@@ -52,7 +52,7 @@ packages/
   convex/           Database schema, queries, mutations
 infra/              Deployment notes (Dokploy on Hostinger VPS)
 scripts/            Seed data generator
-docs/               HappyRobot setup, Dokploy setup, client document
+docs/               Voice AI setup, Dokploy setup, client document
 ```
 
 ## Bridge API Endpoints
@@ -63,7 +63,7 @@ docs/               HappyRobot setup, Dokploy setup, client document
 | GET | `/api/v1/loads/:id` | Get load details |
 | GET | `/api/v1/carriers/:mc` | Verify carrier via FMCSA |
 | POST | `/api/v1/offers` | Log negotiation offer |
-| POST | `/api/v1/webhooks/call-completed` | HappyRobot call webhook |
+| POST | `/api/v1/webhooks/call-completed` | Voice AI call webhook |
 | GET | `/api/v1/health` | Health check |
 
 All endpoints require `x-api-key` header (except health check).
@@ -89,9 +89,5 @@ See the full step-by-step walkthrough in [docs/dokploy-setup.md](docs/dokploy-se
 ## Documentation
 
 - [Dokploy Setup Guide](docs/dokploy-setup.md)
-- [HappyRobot Setup Guide](docs/happyrobot-setup.md)
+- [Voice AI Setup Guide](docs/happyrobot-setup.md)
 - [Acme Logistics Solution Document](docs/acme-logistics-solution.md)
-
-## License
-
-Private - built for the HappyRobot FDE Technical Challenge.
