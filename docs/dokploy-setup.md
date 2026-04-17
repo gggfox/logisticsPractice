@@ -43,14 +43,14 @@ In the Dokploy UI:
    - Dockerfile Path: `apps/api/Dockerfile`
    - Build Context: `.` (monorepo root)
 5. **Network**:
-   - Container Port: `3111` (iii-http)
-   - Additional Port: `3112` (iii-stream, internal only — do not attach a domain)
+   - Container Port: `3111` (Fastify HTTP)
    - Attach the `signoz-net` Docker network so the API can push OTLP to the
      SigNoz collector (see [section 9](#9-observability-stack-signoz)).
+   - Attach the same Docker network as the Redis service so BullMQ can
+     reach it at `redis://redis:6379`.
 6. **Environment Variables** (paste into the Env tab):
    ```env
    HTTP_PORT=3111
-   STREAM_PORT=3112
    DASHBOARD_ORIGIN=https://dashboard.<yourdomain>
    BRIDGE_API_KEY=...
    ADMIN_API_KEY=...
@@ -60,12 +60,12 @@ In the Dokploy UI:
    HAPPYROBOT_API_KEY=...
    HAPPYROBOT_BASE_URL=https://api.happyrobot.ai
 
-   # Required by the iii production runtime (state / stream / pubsub adapters)
+   # Required by BullMQ producers + workers
    REDIS_URL=redis://redis:6379
 
-   # Observability (see section 9)
+   # Observability (see section 9). Exporter is OTLP-HTTP on port 4318.
    OTEL_ENABLED=true
-   OTEL_EXPORTER_OTLP_ENDPOINT=http://signoz-otel-collector:4317
+   OTEL_EXPORTER_OTLP_ENDPOINT=http://signoz-otel-collector:4318
    OTEL_SERVICE_NAME=carrier-sales-api
    SERVICE_VERSION=${DOKPLOY_COMMIT_SHA}
    SERVICE_NAMESPACE=production
@@ -136,20 +136,25 @@ All runtime secrets live in Dokploy's per-application Env tab. To rotate:
 | API container restarts in a loop | Missing required env var | Check `apps/api` logs; compare against `.env.example` |
 | HTTPS cert not issued | DNS not propagated or port 80/443 blocked | Confirm A records and that Hostinger firewall allows 80/443 |
 | Push to `main` didn't trigger a build | GitHub App not installed on the repo | Reinstall the Dokploy GitHub App against this repo |
-| API boots but no traces in SigNoz | `signoz-net` not attached to the API app | In Dokploy -> api -> Advanced -> Networks, attach `signoz-net` and Redeploy |
-| API boots but `iii-stream` / `iii-state` errors | `REDIS_URL` unreachable | Confirm the Redis app is running and reachable at `redis://redis:6379` |
+| API boots but no traces in SigNoz | `signoz-net` not attached to the API app, or `OTEL_EXPORTER_OTLP_ENDPOINT` still pointing at `:4317` | In Dokploy -> api -> Advanced -> Networks, attach `signoz-net`; ensure the endpoint uses port `4318` (HTTP), not `4317`; Redeploy |
+| API boots but BullMQ workers never pick up jobs | `REDIS_URL` unreachable | Confirm the Redis app is running and reachable at `redis://redis:6379` from the `api` container |
 
 ## 9. Observability Stack (SigNoz)
 
 The API pushes OpenTelemetry traces, metrics, and logs to a self-hosted
 [SigNoz](https://signoz.io/) instance over OTLP. Set it up once per VPS.
 
-### 9.1 Deploy Redis (required by Motia iii runtime)
+### 9.1 Deploy Redis (required by BullMQ)
 
 1. In your `carrier-sales` project, click **Create Service -> Template**.
 2. Pick **Redis** (Dokploy provides a built-in template).
 3. Accept the defaults. Redis will be reachable on the internal network at
    `redis://redis:6379`. Do **not** publish it to the host.
+
+> BullMQ requires `maxRetriesPerRequest: null` and `enableReadyCheck: false`
+> on the ioredis client — we set those in
+> [`apps/api/src/queues/index.ts`](../apps/api/src/queues/index.ts). No
+> extra Redis-side configuration is needed.
 
 ### 9.2 Deploy SigNoz (Docker Compose app)
 
@@ -164,6 +169,9 @@ The API pushes OpenTelemetry traces, metrics, and logs to a self-hosted
    SIGNOZ_UI_PORT=8080
    SIGNOZ_JWT_SECRET=<openssl rand -base64 32>
    ```
+   > **Required**: `SIGNOZ_JWT_SECRET` has no default. The compose file uses
+   > `${SIGNOZ_JWT_SECRET:?...}` so the stack refuses to start without it.
+   > Generate once with `openssl rand -base64 32` and store in Dokploy's Env tab.
 5. **Domain**: host `signoz.<yourdomain>`, container port `8080`, HTTPS on.
 6. Click **Deploy**. First boot takes ~3 minutes (ClickHouse migrations). The
    `bootstrap-configs` init container pulls the matching upstream config
@@ -204,8 +212,9 @@ In SigNoz:
   and requests with `x-debug: 1`; samples successes at
   `WIDE_EVENT_SUCCESS_SAMPLE_RATE` (default 1.0). Tune this env on the `api`
   app when log volume becomes an issue.
-- Trace sampling is `sampling_ratio: 1.0` in
-  [`apps/api/config-production.yaml`](../apps/api/config-production.yaml);
-  drop to 0.1 once volume is high.
+- Trace sampling is driven by the OTel Node SDK env vars. Default is
+  `parentbased_always_on` (1.0). Drop to 10 % with
+  `OTEL_TRACES_SAMPLER=parentbased_traceidratio` +
+  `OTEL_TRACES_SAMPLER_ARG=0.1` once volume is high.
 - SigNoz retention: defaults to 7 days (traces/logs), 30 days (metrics).
   Change it in the SigNoz UI under **Settings -> General**.

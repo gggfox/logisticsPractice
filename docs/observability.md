@@ -1,14 +1,20 @@
 # Observability
 
-The API emits three telemetry streams to SigNoz over OTLP:
+The API emits three telemetry streams to SigNoz over **OTLP-HTTP** (port
+`4318`). Exporters are configured in
+[`apps/api/src/otel.ts`](../apps/api/src/otel.ts); the OTel Node SDK is
+started before any other import in [`apps/api/src/server.ts`](../apps/api/src/server.ts)
+so auto-instrumentation patches modules on first load.
 
-- **Traces** — automatic spans per step + HTTP request, via Motia's
-  `iii-observability` worker.
-- **Metrics** — built-in iii metrics (`http.server.*`, `queue.*`, `state.*`)
-  plus custom domain meters under `carrier_sales.*`
+- **Traces** — auto-instrumented spans for Fastify (HTTP server), ioredis,
+  BullMQ (via `@appsignal/opentelemetry-instrumentation-bullmq`), and
+  outbound `http`/`https` calls. No manual span wiring.
+- **Metrics** — custom domain meters under `carrier_sales.*` plus Node
+  runtime metrics from auto-instrumentation
   (see [`apps/api/src/observability/metrics.ts`](../apps/api/src/observability/metrics.ts)).
-- **Logs** — one **wide event** per handler invocation, correlated to the
-  trace via `trace_id`.
+- **Logs** — one **wide event** per request / queue job / cron tick,
+  correlated to the trace via `trace_id` (pulled from the active span
+  with `trace.getActiveSpan()`).
 
 This doc covers the wide-event contract. For infrastructure setup see
 [`dokploy-setup.md` § 9](./dokploy-setup.md#9-observability-stack-signoz).
@@ -41,12 +47,12 @@ Every wide event includes:
 | `service_version`    | string                 | `SERVICE_VERSION` (git sha in prod).      |
 | `service_namespace`  | string                 | `development` / `production`.             |
 | `deployment_region`  | string                 | `DEPLOYMENT_REGION` (e.g. `hostinger-eu`).|
-| `step_name`          | string                 | Motia step name (`FindLoad`, `ClassifyCall`, ...). |
+| `step_name`          | string                 | Handler name (`FindLoad`, `ClassifyCall`, ...). Carried over from the Motia-era naming so SigNoz dashboards still filter on it. |
 | `trigger_type`       | `api` / `queue` / `cron` | -                                       |
 | `trigger_path`       | string?                | HTTP path for api triggers.               |
 | `trigger_method`     | string?                | HTTP method for api triggers.             |
-| `trigger_topic`      | string?                | Topic for queue triggers.                 |
-| `trace_id`           | string                 | W3C trace id from `ctx.traceId`. Used to join with SigNoz spans. |
+| `trigger_topic`      | string?                | BullMQ queue name for queue triggers; cron pattern for cron triggers. |
+| `trace_id`           | string                 | W3C trace id from the active OTel span. Joins to spans in SigNoz. |
 | `outcome`            | `success` / `error` / `rejected` | `rejected` = 4xx, `error` = 5xx or throw. |
 | `duration_ms`        | number                 | Computed in `emitWideEvent`.              |
 | `status_code`        | number?                | HTTP only.                                |
@@ -54,7 +60,9 @@ Every wide event includes:
 
 ### HTTP-specific base fields
 
-Added by `wideEventMiddleware`:
+Added by the `wideEvent` Fastify plugin
+([`apps/api/src/plugins/wide-event.ts`](../apps/api/src/plugins/wide-event.ts))
+in its `onRequest` hook:
 
 | Field          | Notes                                                   |
 |----------------|---------------------------------------------------------|
@@ -64,10 +72,11 @@ Added by `wideEventMiddleware`:
 | `user_agent`   | From `User-Agent` header.                               |
 | `ip`           | `X-Forwarded-For` / `X-Real-IP`.                        |
 
-### Per-step business fields
+### Per-handler business fields
 
-Enriched by handlers via `enrichWideEvent(ctx, { ... })` (HTTP) or
-`enrich({ ... })` (queue/cron).
+Enriched by handlers via `enrichWideEvent(req, { ... })` inside a Fastify
+route, or via the `enrich(...)` callback passed by `withWideEvent` in a
+BullMQ worker / cron tick.
 
 | Step                         | Business fields                                                          |
 |------------------------------|--------------------------------------------------------------------------|
@@ -99,63 +108,97 @@ All other events are sampled at `WIDE_EVENT_SUCCESS_SAMPLE_RATE` (default
 `1.0` = keep everything). Lower it (e.g. `0.1`) on the `api` app in Dokploy
 once volume becomes painful.
 
-Trace sampling is separate and lives in
-[`apps/api/config-production.yaml`](../apps/api/config-production.yaml) under
-`iii-observability.sampling_ratio`.
+Trace sampling is controlled by the OTel Node SDK via
+`OTEL_TRACES_SAMPLER` and `OTEL_TRACES_SAMPLER_ARG` env vars. The default
+is `parentbased_always_on` (1.0). Set
+`OTEL_TRACES_SAMPLER=parentbased_traceidratio` and
+`OTEL_TRACES_SAMPLER_ARG=0.1` to drop to 10 % once volume is high.
 
 ## Usage
 
-### HTTP step
+### Fastify route
 
 ```ts
-import { api, type Handlers, type StepConfig } from 'motia'
-import { wideEventMiddleware } from '../../middleware/wide-event.middleware.js'
+import type { FastifyPluginAsync } from 'fastify'
+import type { ZodTypeProvider } from 'fastify-type-provider-zod'
+import { z } from 'zod'
 import { enrichWideEvent } from '../../observability/wide-event-store.js'
 
-export const config = {
-  name: 'MyStep',
-  triggers: [
-    api('GET', '/api/v1/widgets/:id', {
-      middleware: [rateLimiter, apiKeyAuth, wideEventMiddleware],
-    }),
-  ],
-  flows: ['widgets'],
-} as const satisfies StepConfig
+const ParamsSchema = z.object({ id: z.string().min(1) })
 
-export const handler: Handlers<typeof config> = async (req, ctx) => {
-  const { id } = req.pathParams as { id: string }
-  enrichWideEvent(ctx, { widget_id: id })
+const myRoute: FastifyPluginAsync = async (app) => {
+  app.withTypeProvider<ZodTypeProvider>().get(
+    '/api/v1/widgets/:id',
+    { schema: { params: ParamsSchema } },
+    async (req, reply) => {
+      const { id } = req.params
+      enrichWideEvent(req, { widget_id: id })
 
-  const widget = await db.widgets.get(id)
-  enrichWideEvent(ctx, { found: widget != null })
+      const widget = await db.widgets.get(id)
+      enrichWideEvent(req, { found: widget != null })
 
-  return widget
-    ? { status: 200, body: widget }
-    : { status: 404, body: { error: 'Not Found', statusCode: 404 } }
+      if (!widget) return reply.code(404).send({ error: 'Not Found', statusCode: 404 })
+      return widget
+    },
+  )
+}
+
+export default myRoute
+```
+
+The `wideEvent` plugin emits exactly one wide event from its `onResponse`
+/ `onError` hook, capturing `status_code`, `duration_ms`, and any error.
+
+### BullMQ worker
+
+```ts
+import { Worker } from 'bullmq'
+import { logger } from '../logger.js'
+import { withWideEvent } from '../observability/wide-event.js'
+import {
+  QUEUE_NAMES,
+  type ProcessWidgetInput,
+  ProcessWidgetInputSchema,
+  getRedisConnection,
+} from '../queues/index.js'
+
+export function createProcessWidgetWorker(): Worker<ProcessWidgetInput> {
+  return new Worker<ProcessWidgetInput>(
+    QUEUE_NAMES.processWidget,
+    async (job) => {
+      const data = ProcessWidgetInputSchema.parse(job.data)
+      await withWideEvent(
+        'ProcessWidget',
+        { logger, seed: { trigger_type: 'queue', trigger_topic: QUEUE_NAMES.processWidget } },
+        async (enrich) => {
+          enrich({ widget_id: data.id })
+          const result = await process(data)
+          enrich({ items_processed: result.count })
+        },
+      )
+    },
+    { connection: getRedisConnection() },
+  )
 }
 ```
 
-The middleware emits exactly one wide event in `finally`, capturing
-`status_code`, `duration_ms`, and any uncaught error.
-
-### Queue / cron step
+### Croner cron tick
 
 ```ts
-import { type Handlers, type StepConfig, queue } from 'motia'
-import { withWideEvent } from '../../observability/wide-event.js'
+import { Cron } from 'croner'
+import { logger } from '../logger.js'
+import { withWideEvent } from '../observability/wide-event.js'
 
-export const config = {
-  name: 'ProcessWidget',
-  triggers: [queue('widget.created', { input: InputSchema })],
-  flows: ['widgets'],
-} as const satisfies StepConfig
-
-export const handler: Handlers<typeof config> = async (input, ctx) =>
-  withWideEvent('ProcessWidget', ctx, async (enrich) => {
-    enrich({ widget_id: input.id })
-    const result = await process(input)
-    enrich({ items_processed: result.count })
-  })
+new Cron('0 * * * *', { protect: true }, async () => {
+  await withWideEvent(
+    'AggregateMetrics',
+    { logger, seed: { trigger_type: 'cron', trigger_topic: '0 * * * *' } },
+    async (enrich) => {
+      enrich({ total: 0 })
+      // ...
+    },
+  )
+})
 ```
 
 ## Adding a domain metric
@@ -177,9 +220,39 @@ export const handler: Handlers<typeof config> = async (input, ctx) =>
 
 ## Local development
 
-`motia dev` does not emit OTLP — the `iii-observability` worker only runs
-against `config-production.yaml`. Locally, wide events still print to the
-console via `ctx.logger.info(...)` for manual inspection. To test against a
-real SigNoz instance locally, run `docker compose -f infra/signoz/docker-compose.yml up -d`
-then set `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317` and run with
-`iii --config apps/api/config-production.yaml` instead of `motia dev`.
+OTel is **off by default** in local dev. `pnpm dev` runs `tsx watch
+src/server.ts` and honours `OTEL_ENABLED` from the loaded `.env`; the
+checked-in [`.env.example`](../.env.example) sets `OTEL_ENABLED=false`.
+Wide events still print to the console via Pino, so you get the useful
+signal without any exporter running.
+
+> **Why off?** The production `.env` uses
+> `OTEL_EXPORTER_OTLP_ENDPOINT=http://signoz-otel-collector:4318`, a
+> docker-network DNS name that only resolves inside the `signoz-net`
+> bridge created by [`infra/signoz/docker-compose.yml`](../infra/signoz/docker-compose.yml).
+> From the host it errors with `failed to lookup address information`,
+> which spams logs every 5s and stalls graceful shutdown while the OTel
+> SDK tries to flush one last batch. Keep OTel off locally unless
+> you've actually wired up a reachable collector.
+
+To push traces to a local SigNoz instance, pick one of:
+
+1. **Publish the OTLP-HTTP collector port to the host.** In
+   [`infra/signoz/docker-compose.yml`](../infra/signoz/docker-compose.yml),
+   add a `ports:` block to the `otel-collector` service (`"4318:4318"`),
+   then set in your `.env`:
+
+   ```bash
+   OTEL_ENABLED=true
+   OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+   ```
+
+2. **Run the API inside the SigNoz network.** Attach your API container
+   to `signoz-net` and leave
+   `OTEL_EXPORTER_OTLP_ENDPOINT=http://signoz-otel-collector:4318`.
+   Only useful if you're already running the API from docker locally.
+
+> **Why 4318 (HTTP) and not 4317 (gRPC)?** The runtime uses the
+> `@opentelemetry/exporter-*-otlp-http` family so the image does not pull
+> in `@grpc/grpc-js` and its native bindings. HTTP is the default the
+> SigNoz collector speaks on `4318`; gRPC on `4317` is not used.
