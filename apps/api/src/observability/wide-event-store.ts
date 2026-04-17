@@ -1,30 +1,32 @@
+/**
+ * Per-request wide-event attachment.
+ *
+ * The wide-event Fastify plugin seeds a `WideEvent` in `onRequest` and
+ * stashes it on the `FastifyRequest` so route handlers can enrich it with
+ * business context via `enrichWideEvent(req, { ... })`. The plugin's
+ * `onResponse` / `onError` hooks emit it exactly once.
+ *
+ * Storage is a `WeakMap<FastifyRequest, WideEvent>`: no manual cleanup, no
+ * cross-request leakage, and no dependency on `AsyncLocalStorage` because
+ * every call site already has the request in hand.
+ */
+
+import type { FastifyRequest } from 'fastify'
 import type { WideEvent } from './wide-event.js'
 
-// Intentionally minimal `ctx` type so this works for any FlowContext variance
-// (api, queue, cron, with/without enqueue generics). The WeakMap is keyed by
-// reference identity, not structural type.
-type CtxLike = object
+type RequestLike = object
 
-const store = new WeakMap<CtxLike, WideEvent>()
+const store = new WeakMap<RequestLike, WideEvent>()
 
-export function attachWideEvent(ctx: CtxLike, event: WideEvent): void {
-  store.set(ctx, event)
+export function attachWideEvent(req: FastifyRequest, event: WideEvent): void {
+  store.set(req, event)
 }
 
-/**
- * Retrieve the wide event attached to the current request by
- * `wideEventMiddleware`. Handlers use this to enrich the in-flight event with
- * business context via `enrichWideEvent(ctx, { mc_number, ... })`.
- *
- * Returns `undefined` only if the middleware was not registered -- during
- * normal operation the event always exists inside an HTTP handler that
- * declares `wideEventMiddleware` in its `middleware: [...]` array.
- */
-export function getWideEvent(ctx: CtxLike): WideEvent | undefined {
-  return store.get(ctx)
+export function getWideEvent(req: FastifyRequest): WideEvent | undefined {
+  return store.get(req)
 }
 
-export function enrichWideEvent(ctx: CtxLike, fields: Record<string, unknown>): void {
-  const event = getWideEvent(ctx)
+export function enrichWideEvent(req: FastifyRequest, fields: Record<string, unknown>): void {
+  const event = store.get(req)
   if (event) Object.assign(event, fields)
 }
