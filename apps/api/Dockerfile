@@ -42,14 +42,10 @@ WORKDIR /app
 COPY --from=iii-installer /root/.local/bin/iii /usr/local/bin/iii
 COPY --from=builder --chown=appuser:appgroup /app/apps/api/dist/index-production.js ./dist/
 COPY --from=builder --chown=appuser:appgroup /app/apps/api/dist/index-production.js.map ./dist/
-# Bump to bust Docker layer cache when we only change config-production.yaml.
-ARG CONFIG_REV=2026-04-17-01
+ARG CONFIG_REV=2026-04-17-02
 RUN echo "config rev ${CONFIG_REV}" > /tmp/.config-rev
 COPY --from=builder --chown=appuser:appgroup /app/apps/api/config-production.yaml ./config.yaml
 COPY --from=builder --chown=appuser:appgroup /app/apps/api/package.json ./package.json
-RUN echo "---- config.yaml checksum ----" && \
-    head -5 config.yaml && \
-    sha256sum config.yaml
 
 USER appuser
 
@@ -60,7 +56,7 @@ EXPOSE 3112
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
   CMD wget --no-verbose --tries=1 --spider http://localhost:3111/api/v1/health || exit 1
 
-CMD ["/bin/sh", "-c", "echo '--- iii version ---'; iii --version || true; echo '--- head config.yaml ---'; head -25 config.yaml; echo '--- starting iii ---'; iii --config config.yaml; status=$?; echo \"--- iii exited with status $status ---\"; echo 'sleeping 3600s so logs persist'; sleep 3600"]
+CMD ["iii", "--config", "config.yaml"]
 
 LABEL org.opencontainers.image.title="Carrier Sales API" \
       org.opencontainers.image.description="Motia-powered Bridge API for HappyRobot carrier sales automation"
