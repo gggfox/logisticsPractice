@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Toaster } from 'sonner'
+import { ErrorBoundary } from './components/ErrorBoundary'
 import { Sidebar } from './components/Sidebar'
 import { CallHistoryPage } from './pages/CallHistoryPage'
 import { CarrierIntelPage } from './pages/CarrierIntelPage'
@@ -39,7 +40,9 @@ export function App() {
         onToggleDarkMode={toggleDarkMode}
       />
       <main className="flex-1 overflow-y-auto p-6 lg:p-8">
-        <PageComponent />
+        <ErrorBoundary key={currentPage}>
+          <PageComponent />
+        </ErrorBoundary>
       </main>
       <Toaster position="top-right" richColors />
     </div>

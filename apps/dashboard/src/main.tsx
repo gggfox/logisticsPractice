@@ -2,11 +2,10 @@ import { ConvexProvider, ConvexReactClient } from 'convex/react'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { App } from './App'
+import { config } from './config'
 import './index.css'
 
-const convexUrl = import.meta.env.VITE_CONVEX_URL as string
-
-const convex = new ConvexReactClient(convexUrl || 'https://placeholder.convex.cloud')
+const convex = new ConvexReactClient(config.convex.url)
 
 const rootElement = document.getElementById('root')
 if (!rootElement) {
