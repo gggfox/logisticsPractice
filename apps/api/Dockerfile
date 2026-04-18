@@ -6,7 +6,7 @@
 # here -- they're separate deploy units.
 FROM node:22-alpine AS builder
 
-RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN corepack enable && corepack prepare pnpm@10.30.3 --activate
 
 WORKDIR /app
 
@@ -30,7 +30,9 @@ RUN pnpm --filter @carrier-sales/shared build && \
 # `pnpm deploy` materializes a self-contained node_modules for a single
 # workspace package, stripping dev deps and flattening workspace links
 # into a portable tree we can copy into the runtime image.
-RUN pnpm --filter @carrier-sales/api deploy --prod /prod/api
+# --legacy keeps pre-v10 deploy semantics (no inject-workspace-packages
+# required); without it pnpm v10 aborts with ERR_PNPM_DEPLOY_NONINJECTED_WORKSPACE.
+RUN pnpm --filter @carrier-sales/api deploy --prod --legacy /prod/api
 
 # ---------- runner ----------
 FROM node:22-alpine AS runner
