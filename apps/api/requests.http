@@ -145,9 +145,10 @@ Content-Type: application/json
 ###
 # @name callCompletedWebhook
 # Inbound webhook from HappyRobot when a call ends.
-# `x-webhook-signature` is optional: required only when WEBHOOK_SECRET is set
-# on the server. For local testing leave it off or compute:
-#   echo -n '<raw body>' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET"
+# Auth is `x-api-key` alone. `x-webhook-signature` is optional telemetry;
+# it never gates the 200 response -- if sent, the server records
+# signature_state=valid|invalid on the wide event and the
+# carrier_sales.webhook.received counter.
 POST {{baseUrl}}/api/v1/webhooks/call-completed
 x-api-key: {{apiKey}}
 Content-Type: application/json

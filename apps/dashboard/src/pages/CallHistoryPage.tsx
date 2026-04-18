@@ -1,13 +1,10 @@
 import { Badge } from '@/components/Badge'
-import {
-  formatCurrency,
-  formatDateTime,
-  formatDuration,
-  outcomeColor,
-  sentimentColor,
-} from '@/lib/formatters'
+import { EmptyState } from '@/components/EmptyState'
+import { PageLayout } from '@/components/layout/PageLayout'
+import { formatCurrency, formatDateTime, formatDuration } from '@/lib/formatters'
 import { api } from '@carrier-sales/convex/convex/_generated/api'
 import { useQuery } from 'convex/react'
+import { ChevronRight, Download, SlidersHorizontal } from 'lucide-react'
 import { Fragment, type KeyboardEvent, useState } from 'react'
 
 type OutcomeFilter = 'all' | 'booked' | 'declined' | 'no_match' | 'transferred' | 'dropped'
@@ -56,8 +53,6 @@ interface CallRowProps {
 }
 
 function CallRow({ call, expanded, onToggle }: CallRowProps) {
-  const outcomeKey = call.outcome ?? 'unknown'
-  const sentimentKey = call.sentiment ?? 'unknown'
   const transcriptText = call.transcript?.trim() ?? ''
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTableRowElement>) => {
@@ -74,55 +69,52 @@ function CallRow({ call, expanded, onToggle }: CallRowProps) {
         onKeyDown={handleKeyDown}
         tabIndex={0}
         aria-expanded={expanded}
-        className="cursor-pointer transition hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500/30 dark:hover:bg-gray-800/60"
+        className="cursor-pointer border-l-2 border-l-transparent transition-colors hover:border-l-accent-500 hover:bg-surface-2/50 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-accent-500/30"
       >
-        <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-900 dark:text-gray-100">
+        <td className="whitespace-nowrap px-4 py-3 text-sm text-slate-700 dark:text-slate-300">
           {formatDateTime(call.started_at)}
         </td>
-        <td className="max-w-[140px] truncate px-4 py-3 font-mono text-xs text-gray-800 dark:text-gray-200">
+        <td className="max-w-[160px] truncate px-4 py-3 font-mono text-xs text-slate-800 dark:text-slate-200">
           {call.call_id}
         </td>
-        <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-800 dark:text-gray-200">
+        <td className="whitespace-nowrap px-4 py-3 font-mono text-sm text-slate-800 dark:text-slate-200">
           {call.carrier_mc}
         </td>
         <td className="px-4 py-3">
-          <Badge className={outcomeColor(outcomeKey === 'unknown' ? '' : outcomeKey)}>
+          <Badge variant="outcome" tone={call.outcome}>
             {labelFromKey(call.outcome)}
           </Badge>
         </td>
         <td className="px-4 py-3">
-          <Badge className={sentimentColor(sentimentKey === 'unknown' ? '' : sentimentKey)}>
+          <Badge variant="sentiment" tone={call.sentiment}>
             {labelFromKey(call.sentiment)}
           </Badge>
         </td>
-        <td className="whitespace-nowrap px-4 py-3 text-sm tabular-nums text-gray-800 dark:text-gray-200">
+        <td className="whitespace-nowrap px-4 py-3 text-sm numeric text-slate-800 dark:text-slate-200">
           {call.negotiation_rounds}
         </td>
-        <td className="whitespace-nowrap px-4 py-3 text-sm tabular-nums text-gray-800 dark:text-gray-200">
+        <td className="whitespace-nowrap px-4 py-3 text-sm numeric text-slate-800 dark:text-slate-200">
           {call.final_rate !== undefined ? formatCurrency(call.final_rate) : '—'}
         </td>
-        <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-800 dark:text-gray-200">
-          <span className="inline-flex w-full items-center justify-between gap-2 tabular-nums">
+        <td className="whitespace-nowrap px-4 py-3 text-sm numeric text-slate-800 dark:text-slate-200">
+          <span className="inline-flex w-full items-center justify-between gap-2">
             <span>
               {call.duration_seconds !== undefined ? formatDuration(call.duration_seconds) : '—'}
             </span>
-            <span
-              className="inline-block shrink-0 text-gray-500 transition-transform dark:text-gray-400"
+            <ChevronRight
+              className="h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform"
               style={{ transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)' }}
+              strokeWidth={2}
               aria-hidden
-            >
-              ›
-            </span>
+            />
           </span>
         </td>
       </tr>
       {expanded ? (
-        <tr className="bg-gray-50/80 dark:bg-gray-900/60">
+        <tr className="bg-surface-2/60">
           <td colSpan={8} className="px-4 py-4">
-            <p className="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
-              Transcript
-            </p>
-            <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded-lg border border-gray-200 bg-white p-3 font-sans text-sm text-gray-800 dark:border-gray-600 dark:bg-gray-950 dark:text-gray-200">
+            <p className="eyebrow">Transcript</p>
+            <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded-lg border border-surface-border/70 bg-surface-1 p-3 font-sans text-sm text-slate-700 dark:text-slate-300">
               {transcriptText || 'No transcript available.'}
             </pre>
           </td>
@@ -184,37 +176,40 @@ export function CallHistoryPage() {
 
   const isLoading = calls === undefined
 
-  return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-gray-900 dark:text-gray-100">
-            Call history
-          </h1>
-          <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
-            Review outcomes, sentiment, and transcripts from carrier sales calls.
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={exportCsv}
-          disabled={isLoading || filteredCalls.length === 0}
-          className="inline-flex items-center justify-center rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-200 dark:hover:bg-gray-800"
-        >
-          Export CSV
-        </button>
-      </div>
+  const exportAction = (
+    <button
+      type="button"
+      onClick={exportCsv}
+      disabled={isLoading || filteredCalls.length === 0}
+      className="inline-flex items-center gap-2 rounded-lg border border-surface-border/70 bg-surface-1 px-3 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/40 disabled:cursor-not-allowed disabled:opacity-50 dark:text-slate-200"
+    >
+      <Download className="h-4 w-4" strokeWidth={1.75} aria-hidden />
+      Export CSV
+    </button>
+  )
 
+  return (
+    <PageLayout
+      eyebrow="Archive"
+      title="Call history"
+      description="Review outcomes, sentiment, and transcripts from carrier sales calls."
+      mode="fixed"
+      actions={exportAction}
+    >
       <div
-        className="flex flex-wrap items-center gap-3 rounded-xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-900/40"
+        className="flex shrink-0 flex-wrap items-end gap-4 rounded-xl2 border border-surface-border/70 bg-surface-1 p-4 shadow-card"
         data-testid="call-history-filters"
       >
-        <label className="flex flex-col gap-1 text-xs font-medium text-gray-600 dark:text-gray-400">
+        <div className="inline-flex h-9 items-center gap-2 rounded-lg bg-surface-2 px-3 text-xs font-medium text-slate-500 dark:text-slate-400">
+          <SlidersHorizontal className="h-3.5 w-3.5" strokeWidth={1.75} aria-hidden />
+          Filters
+        </div>
+        <label className="flex flex-col gap-1 text-[11px] font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
           Outcome
           <select
             value={outcomeFilter}
             onChange={(e) => setOutcomeFilter(e.target.value as OutcomeFilter)}
-            className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/30 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
+            className="rounded-lg border border-surface-border/70 bg-surface-1 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-accent-500 focus:outline-none focus:ring-2 focus:ring-accent-500/30 dark:text-slate-100"
           >
             <option value="all">All outcomes</option>
             <option value="booked">Booked</option>
@@ -224,12 +219,12 @@ export function CallHistoryPage() {
             <option value="dropped">Dropped</option>
           </select>
         </label>
-        <label className="flex flex-col gap-1 text-xs font-medium text-gray-600 dark:text-gray-400">
+        <label className="flex flex-col gap-1 text-[11px] font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">
           Sentiment
           <select
             value={sentimentFilter}
             onChange={(e) => setSentimentFilter(e.target.value as SentimentFilter)}
-            className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/30 dark:border-gray-600 dark:bg-gray-900 dark:text-gray-100"
+            className="rounded-lg border border-surface-border/70 bg-surface-1 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-accent-500 focus:outline-none focus:ring-2 focus:ring-accent-500/30 dark:text-slate-100"
           >
             <option value="all">All sentiments</option>
             <option value="positive">Positive</option>
@@ -238,17 +233,17 @@ export function CallHistoryPage() {
             <option value="frustrated">Frustrated</option>
           </select>
         </label>
-        <p className="ml-auto text-xs text-gray-500 dark:text-gray-500">
+        <p className="ml-auto text-xs text-slate-500 dark:text-slate-400">
           {isLoading
             ? 'Loading…'
             : `${filteredCalls.length} call${filteredCalls.length === 1 ? '' : 's'}`}
         </p>
       </div>
 
-      <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-900/40">
-        <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
-            <thead className="bg-gray-50 dark:bg-gray-900/80">
+      <div className="mt-4 flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl2 border border-surface-border/70 bg-surface-1 shadow-card">
+        <div className="min-h-0 flex-1 overflow-auto">
+          <table className="min-w-full divide-y divide-surface-border/70">
+            <thead className="sticky top-0 z-10 bg-surface-1/95 backdrop-blur">
               <tr>
                 {[
                   'Date',
@@ -263,31 +258,33 @@ export function CallHistoryPage() {
                   <th
                     key={h}
                     scope="col"
-                    className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-600 dark:text-gray-400"
+                    className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400"
                   >
                     {h}
                   </th>
                 ))}
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+            <tbody className="divide-y divide-surface-border/70">
               {isLoading ? (
-                Array.from({ length: 6 }).map((_, i) => (
+                Array.from({ length: 8 }).map((_, i) => (
                   <tr key={`sk-${String(i)}`}>
                     {Array.from({ length: 8 }).map((__, j) => (
                       <td key={`sk-${String(i)}-${String(j)}`} className="px-4 py-3">
-                        <div className="h-4 animate-pulse rounded bg-gray-200 dark:bg-gray-700" />
+                        <div className="h-4 animate-pulse rounded bg-surface-2" />
                       </td>
                     ))}
                   </tr>
                 ))
               ) : filteredCalls.length === 0 ? (
                 <tr>
-                  <td
-                    colSpan={8}
-                    className="px-4 py-12 text-center text-sm text-gray-500 dark:text-gray-400"
-                  >
-                    No calls match the current filters.
+                  <td colSpan={8} className="p-0">
+                    <EmptyState
+                      className="m-6 border-0 py-16"
+                      icon={SlidersHorizontal}
+                      title="No calls match"
+                      description="Try clearing a filter or changing your outcome/sentiment selection."
+                    />
                   </td>
                 </tr>
               ) : (
@@ -307,6 +304,6 @@ export function CallHistoryPage() {
           </table>
         </div>
       </div>
-    </div>
+    </PageLayout>
   )
 }

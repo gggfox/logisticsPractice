@@ -28,7 +28,8 @@ export const carrierVerificationCounter = meter.createCounter(
 )
 
 export const webhookReceivedCounter = meter.createCounter('carrier_sales.webhook.received', {
-  description: 'Inbound call-completed webhooks received, tagged by signature validity',
+  description:
+    'Inbound call-completed webhooks received, tagged by signature presence/validity (valid|invalid|absent)',
 })
 
 export const sentimentCounter = meter.createCounter('carrier_sales.sentiment', {

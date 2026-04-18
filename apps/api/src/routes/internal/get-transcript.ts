@@ -19,6 +19,9 @@ const getTranscriptRoute: FastifyPluginAsync = async (app) => {
     '/api/v1/calls/:call_id/transcript',
     {
       schema: {
+        tags: ['calls'],
+        summary: 'Fetch transcript for a completed call',
+        description: 'Proxies HappyRobot to return the transcript and speaker turns for a call_id.',
         params: ParamsSchema,
         response: {
           200: TranscriptResponseSchema,

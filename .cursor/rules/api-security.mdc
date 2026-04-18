@@ -18,7 +18,8 @@ HTTP bridge:
 middleware: [rateLimiter, apiKeyAuth, wideEventMiddleware]
 ```
 
-Webhook (signature-gated; no rate limit so the bridge can't DoS itself):
+Webhook (auth via `x-api-key`; no rate limit so a legitimate burst from
+the caller can't DoS itself):
 
 ```ts
 middleware: [apiKeyAuth, wideEventMiddleware]
@@ -33,6 +34,8 @@ consumes budget. Do not reorder.
 ```ts
 function verifyWebhookSignature(rawBody: string, signature: string | undefined): boolean {
   if (!signature) return false
+  // No secret configured = caller can't be validated; don't return true.
+  if (config.bridge.webhookSecret === '') return false
   const expected = crypto.createHmac('sha256', config.bridge.webhookSecret).update(rawBody).digest('hex')
   const sigBuf = Buffer.from(signature, 'hex')
   const expBuf = Buffer.from(expected, 'hex')
@@ -46,9 +49,15 @@ function verifyWebhookSignature(rawBody: string, signature: string | undefined):
   length mismatch throws -- short-circuit first.
 - HMAC the **raw** request body, not `JSON.stringify(req.body)` (key
   order is not preserved). Motia exposes the raw body; use it.
-- On `false`, return 401 with `{ error, message, statusCode }`. Emit
-  `signature_valid: false` on the wide event + bump
-  `webhookReceivedCounter` with `{ signature_valid: 'false' }`.
+- Signature outcome is **telemetry, not auth**. `x-api-key` already
+  gates the route via the global `apiKeyAuth` plugin, so never 401 on a
+  bad/missing signature. Record
+  `signature_state: 'valid' | 'invalid' | 'absent'` on the wide event
+  and bump `webhookReceivedCounter` with the same label.
+- `WEBHOOK_SECRET` is optional (defaults to empty). With an empty
+  secret the verifier always returns `false`, so `signature_state`
+  flips between `'invalid'` and `'absent'` rather than falsely
+  reporting `'valid'`.
 
 ## 401 responses
 

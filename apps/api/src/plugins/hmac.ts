@@ -1,19 +1,20 @@
 /**
  * HMAC signature verifier for webhook routes.
  *
- * Usage: register this plugin on the webhook prefix (or per-route) after
- * `fastify-raw-body` has exposed `req.rawBody`. The verifier computes
- * `sha256(rawBody)` with `WEBHOOK_SECRET` and compares in constant time
- * to the hex digest carried in `x-webhook-signature`.
+ * The verifier computes `sha256(rawBody)` with `WEBHOOK_SECRET` and
+ * compares in constant time to the hex digest carried in
+ * `x-webhook-signature`. `fastify-raw-body` exposes `req.rawBody` so
+ * we HMAC the exact bytes the caller signed rather than a re-serialized
+ * `JSON.stringify(req.body)` (key order is not preserved by a round-trip).
  *
- * Fixes the old Motia weakness: we HMAC the exact request body bytes
- * rather than `JSON.stringify(req.body)`, so reordered keys can't break
- * verification.
- *
- * On failure this plugin responds 401 and short-circuits. Callers still
- * enrich the wide event with `signature_valid: false` and bump the
- * `carrier_sales.webhook.received` counter in the route handler for
- * alerting; doing it here would couple webhook metrics to plugin code.
+ * In the current deployment the call-completed webhook is authenticated
+ * via `x-api-key` alone (HappyRobot's workflow webhook UI can only send
+ * static headers). `verifyWebhookSignature` is therefore used as
+ * *telemetry* -- the route records the outcome as
+ * `signature_state: 'valid' | 'invalid' | 'absent'` but never 401s on
+ * it. The `hmacVerifier` plugin below still short-circuits 401 on
+ * failure and is kept for any future signing-proxy scenario where the
+ * signature is the actual auth gate.
  */
 
 import crypto from 'node:crypto'
@@ -35,6 +36,9 @@ function headerString(value: string | string[] | undefined): string | undefined 
 }
 
 function verify(rawBody: string | Buffer, signature: string): boolean {
+  // No secret configured = we have nothing to compare against. Return false
+  // so an unset `WEBHOOK_SECRET` can never produce a spurious "valid" state.
+  if (config.bridge.webhookSecret === '') return false
   const expected = crypto
     .createHmac('sha256', config.bridge.webhookSecret)
     .update(rawBody)

@@ -26,12 +26,16 @@ Terminology follows the current HappyRobot docs (<https://docs.happyrobot.ai>):
 1. An organization on <https://platform.happyrobot.ai>.
 2. API deployed (the Motia app in `apps/api`) with these environment variables set
    ( see [`.env.example`](../.env.example) ):
-    - `BRIDGE_API_KEY` — shared secret for tool calls (sent as `x-api-key`)
-    - `WEBHOOK_SECRET` — HMAC-SHA256 secret for the call-completed webhook
+    - `BRIDGE_API_KEY` — shared secret for tool calls and the call-completed
+      webhook (sent as `x-api-key`)
     - `FMCSA_WEB_KEY` — FMCSA developer portal web key
     - `CONVEX_URL`, `CONVEX_DEPLOY_KEY` — Convex backend
     - `HAPPYROBOT_API_KEY` — only needed for fetching transcripts back from
       HappyRobot (`GET /api/v1/calls/:call_id/transcript`)
+    - `WEBHOOK_SECRET` — **optional**. Only consulted when a caller sends
+      `x-webhook-signature` (e.g. a signing proxy in front of the webhook).
+      HappyRobot workflow webhooks only ship static headers, so the common
+      case leaves this unset and relies on `x-api-key` alone.
 3. A public HTTPS base URL for the API (`{BASE_URL}` below). Locally you can expose
    `http://localhost:3111` with a tunnel (cloudflared / ngrok); in production use the
    Dokploy domain from [`docs/dokploy-setup.md`](./dokploy-setup.md).
@@ -349,14 +353,24 @@ Add an **AI Extract** core node after Classify.
 
 Go to **Workflow settings → Webhooks** and add:
 
-| Field   | Value                                                                                   |
-|---------|-----------------------------------------------------------------------------------------|
-| URL     | `{BASE_URL}/api/v1/webhooks/call-completed`                                             |
-| Headers | `x-api-key: {BRIDGE_API_KEY}`, `x-webhook-signature: <HMAC-SHA256 of body with WEBHOOK_SECRET>` |
+| Field   | Value                                                  |
+|---------|--------------------------------------------------------|
+| URL     | `{BASE_URL}/api/v1/webhooks/call-completed`            |
+| Headers | `x-api-key: {BRIDGE_API_KEY}`                          |
 
-The API computes the expected signature as:
+HappyRobot's workflow-level webhook UI only supports static headers, so it
+cannot sign requests per-body. The API treats `x-api-key` as the sole auth
+gate for this route — identical to every other Bridge endpoint.
+
+If you later put a signing proxy in front of the webhook, set `WEBHOOK_SECRET`
+on the API and have the proxy send `x-webhook-signature` as hex-encoded
+HMAC-SHA256 of the raw body. The API records the outcome as
+`signature_state=valid|invalid` on the wide event and the
+`carrier_sales.webhook.received` metric; it never 401s based on the
+signature.
 
 ```bash
+# Example if you're manually signing for testing:
 echo -n '<raw body>' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET"
 ```
 
@@ -398,9 +412,9 @@ API-side variables consumed by the flows above:
 
 | Variable              | Used by                                                |
 |-----------------------|--------------------------------------------------------|
-| `BRIDGE_API_KEY`      | `apiKeyAuth` middleware on every Bridge endpoint       |
+| `BRIDGE_API_KEY`      | `apiKeyAuth` middleware on every Bridge endpoint (including the call-completed webhook) |
 | `ADMIN_API_KEY`       | `/api/v1/admin/seed` only                              |
-| `WEBHOOK_SECRET`      | HMAC verification in `call-completed.step.ts`          |
+| `WEBHOOK_SECRET`      | Optional. Only used when a caller sends `x-webhook-signature`; decorates telemetry rather than gating the route |
 | `FMCSA_WEB_KEY`       | `fmcsa.service.ts`                                     |
 | `HAPPYROBOT_API_KEY`  | `happyrobot.service.ts` (transcript fetch)             |
 | `CONVEX_URL`          | `convex.service.ts` for loads / negotiations / calls   |

@@ -1,7 +1,10 @@
 import { Badge } from '@/components/Badge'
+import { EmptyState } from '@/components/EmptyState'
+import { PageLayout } from '@/components/layout/PageLayout'
 import { formatDateTime } from '@/lib/formatters'
 import { api } from '@carrier-sales/convex/convex/_generated/api'
 import { useQuery } from 'convex/react'
+import { Building2, Search } from 'lucide-react'
 import { useMemo, useState } from 'react'
 
 type CarrierDoc = {
@@ -32,10 +35,10 @@ function buildCarrierStats(calls: CallDoc[]) {
 
 function CarrierTableSkeleton() {
   return (
-    <div className="animate-pulse space-y-3 rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900">
-      <div className="h-10 rounded-lg bg-gray-200 dark:bg-gray-800" />
+    <div className="animate-pulse space-y-3 rounded-xl2 border border-surface-border/70 bg-surface-1 p-4 shadow-card">
+      <div className="h-10 rounded-lg bg-surface-2" />
       {[0, 1, 2, 3, 4].map((i) => (
-        <div key={i} className="h-12 rounded-lg bg-gray-100 dark:bg-gray-800/80" />
+        <div key={i} className="h-12 rounded-lg bg-surface-2" />
       ))}
     </div>
   )
@@ -60,110 +63,118 @@ export function CarrierIntelPage() {
   const loading = carriers === undefined || calls === undefined
 
   return (
-    <div className="space-y-6">
-      <header>
-        <h1 className="text-2xl font-semibold tracking-tight text-gray-900 dark:text-gray-100">
-          Carrier intelligence
-        </h1>
-        <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
-          FMCSA snapshot, eligibility, and call performance by motor carrier.
-        </p>
-      </header>
-
+    <PageLayout
+      eyebrow="Counterparties"
+      title="Carrier intelligence"
+      description="FMCSA snapshot, eligibility, and call performance by motor carrier."
+    >
       <div className="max-w-md">
         <label htmlFor="carrier-search" className="sr-only">
           Search carriers
         </label>
-        <input
-          id="carrier-search"
-          type="search"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search by legal name or MC number…"
-          className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm placeholder:text-gray-500 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100 dark:placeholder:text-gray-500"
-        />
+        <span className="relative block">
+          <Search
+            className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"
+            strokeWidth={1.75}
+            aria-hidden
+          />
+          <input
+            id="carrier-search"
+            type="search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search by legal name or MC number…"
+            className="w-full rounded-lg border border-surface-border/70 bg-surface-1 py-2 pl-9 pr-3 text-sm text-slate-900 shadow-sm placeholder:text-slate-500 focus:border-accent-500 focus:outline-none focus:ring-2 focus:ring-accent-500/30 dark:text-slate-100"
+          />
+        </span>
       </div>
 
-      {loading ? (
-        <CarrierTableSkeleton />
-      ) : (
-        <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-800 dark:bg-gray-900">
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-800">
-              <thead className="bg-gray-50 dark:bg-gray-950/50">
-                <tr>
-                  {[
-                    'MC Number',
-                    'Legal Name',
-                    'DOT Number',
-                    'Operating Status',
-                    'Eligible',
-                    'Verified At',
-                    'Call Count',
-                    'Booking Rate',
-                  ].map((col) => (
-                    <th
-                      key={col}
-                      scope="col"
-                      className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-600 dark:text-gray-400"
-                    >
-                      {col}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-200 dark:divide-gray-800">
-                {filteredCarriers.map((row) => {
-                  const s = statsByMc?.get(row.mc_number)
-                  const callCount = s?.count ?? 0
-                  const bookingRate = callCount > 0 ? (s?.booked ?? 0) / callCount : 0
-                  return (
-                    <tr key={row._id} className="hover:bg-gray-50/80 dark:hover:bg-gray-800/40">
-                      <td className="whitespace-nowrap px-4 py-3 font-mono text-sm text-gray-900 dark:text-gray-100">
-                        {row.mc_number}
-                      </td>
-                      <td className="max-w-[220px] truncate px-4 py-3 text-sm text-gray-900 dark:text-gray-100">
-                        {row.legal_name}
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-3 font-mono text-sm text-gray-700 dark:text-gray-300">
-                        {row.dot_number}
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-700 dark:text-gray-300">
-                        {row.operating_status}
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-3">
-                        {row.is_eligible ? (
-                          <Badge className="bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300">
-                            Yes
-                          </Badge>
-                        ) : (
-                          <Badge className="bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-300">
-                            No
-                          </Badge>
-                        )}
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-3 text-sm text-gray-700 dark:text-gray-300">
-                        {formatDateTime(row.verified_at)}
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-sm text-gray-900 dark:text-gray-100">
-                        {callCount}
-                      </td>
-                      <td className="whitespace-nowrap px-4 py-3 text-right tabular-nums text-sm text-gray-900 dark:text-gray-100">
-                        {callCount === 0 ? '—' : `${(bookingRate * 100).toFixed(1)}%`}
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
+      <div className="mt-6">
+        {loading ? (
+          <CarrierTableSkeleton />
+        ) : filteredCarriers.length === 0 ? (
+          <EmptyState
+            icon={Building2}
+            title="No carriers match your search"
+            description="Try a different legal name or MC number."
+          />
+        ) : (
+          <div className="overflow-hidden rounded-xl2 border border-surface-border/70 bg-surface-1 shadow-card">
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-surface-border/70">
+                <thead className="bg-surface-2/60">
+                  <tr>
+                    {[
+                      'MC Number',
+                      'Legal Name',
+                      'DOT Number',
+                      'Operating Status',
+                      'Eligible',
+                      'Verified At',
+                      'Call Count',
+                      'Booking Rate',
+                    ].map((col) => (
+                      <th
+                        key={col}
+                        scope="col"
+                        className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500 dark:text-slate-400"
+                      >
+                        {col}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-surface-border/70">
+                  {filteredCarriers.map((row) => {
+                    const s = statsByMc?.get(row.mc_number)
+                    const callCount = s?.count ?? 0
+                    const bookingRate = callCount > 0 ? (s?.booked ?? 0) / callCount : 0
+                    return (
+                      <tr
+                        key={row._id}
+                        className="border-l-2 border-l-transparent transition-colors hover:border-l-accent-500 hover:bg-surface-2/40"
+                      >
+                        <td className="whitespace-nowrap px-4 py-3 font-mono text-sm text-slate-900 dark:text-slate-100">
+                          {row.mc_number}
+                        </td>
+                        <td className="max-w-[240px] truncate px-4 py-3 text-sm text-slate-900 dark:text-slate-100">
+                          {row.legal_name}
+                        </td>
+                        <td className="whitespace-nowrap px-4 py-3 font-mono text-sm text-slate-700 dark:text-slate-300">
+                          {row.dot_number}
+                        </td>
+                        <td className="whitespace-nowrap px-4 py-3 text-sm capitalize text-slate-700 dark:text-slate-300">
+                          {row.operating_status.toLowerCase()}
+                        </td>
+                        <td className="whitespace-nowrap px-4 py-3">
+                          {row.is_eligible ? (
+                            <Badge variant="outcome" tone="booked">
+                              Yes
+                            </Badge>
+                          ) : (
+                            <Badge variant="outcome" tone="dropped">
+                              No
+                            </Badge>
+                          )}
+                        </td>
+                        <td className="whitespace-nowrap px-4 py-3 text-sm text-slate-700 dark:text-slate-300">
+                          {formatDateTime(row.verified_at)}
+                        </td>
+                        <td className="whitespace-nowrap px-4 py-3 text-right text-sm numeric text-slate-900 dark:text-slate-100">
+                          {callCount}
+                        </td>
+                        <td className="whitespace-nowrap px-4 py-3 text-right text-sm numeric text-slate-900 dark:text-slate-100">
+                          {callCount === 0 ? '—' : `${(bookingRate * 100).toFixed(1)}%`}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
           </div>
-          {filteredCarriers.length === 0 && (
-            <p className="border-t border-gray-200 px-4 py-6 text-center text-sm text-gray-500 dark:border-gray-800 dark:text-gray-400">
-              No carriers match your search.
-            </p>
-          )}
-        </div>
-      )}
-    </div>
+        )}
+      </div>
+    </PageLayout>
   )
 }

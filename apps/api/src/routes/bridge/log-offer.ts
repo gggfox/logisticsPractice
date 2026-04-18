@@ -26,6 +26,9 @@ const logOfferRoute: FastifyPluginAsync = async (app) => {
     '/api/v1/offers',
     {
       schema: {
+        tags: ['offers'],
+        summary: 'Submit a carrier offer (negotiation round)',
+        description: `Evaluates a carrier's offer for a load. Returns either an acceptance or a counter, advancing the negotiation round stored in Convex by call_id. Round > ${MAX_NEGOTIATION_ROUNDS} short-circuits with \`max_rounds_reached\`.`,
         body: OfferRequestSchema,
         response: {
           200: OfferResponseSchema,

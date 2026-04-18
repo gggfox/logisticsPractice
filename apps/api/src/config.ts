@@ -45,7 +45,10 @@ const EnvSchema = z.object({
   // Bridge API security
   BRIDGE_API_KEY: requiredString('BRIDGE_API_KEY'),
   ADMIN_API_KEY: requiredString('ADMIN_API_KEY'),
-  WEBHOOK_SECRET: requiredString('WEBHOOK_SECRET'),
+  // Optional: only consulted when a caller sends `x-webhook-signature`.
+  // HappyRobot workflow webhooks can only send static headers, so the
+  // common case leaves this unset and relies on `x-api-key` alone.
+  WEBHOOK_SECRET: optionalStringWithDefault(''),
 
   // FMCSA
   FMCSA_WEB_KEY: requiredString('FMCSA_WEB_KEY'),

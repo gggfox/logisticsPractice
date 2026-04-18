@@ -7,8 +7,12 @@ Living document of security-relevant choices in this repo. Pairs with
 ## Boundaries
 
 - **Motia API** (`apps/api`) is the production security boundary. Every
-  public endpoint is rate-limited and API-key authenticated; webhooks are
-  HMAC-verified. See `.cursor/skills/api-security/SKILL.md`.
+  public endpoint — including the call-completed webhook — is rate-limited
+  and API-key authenticated via `x-api-key`. The webhook additionally
+  accepts an optional `x-webhook-signature` HMAC header that is recorded
+  as telemetry (`signature_state=valid|invalid|absent`) but does not gate
+  the response, because HappyRobot's workflow webhook UI can only send
+  static headers. See `.cursor/skills/api-security/SKILL.md`.
 - **Convex** (`packages/convex`) is treated as an **open data plane** for
   this demo — see below.
 - **Dashboard** (`apps/dashboard`) is a Vite SPA with no user auth; it
@@ -73,10 +77,11 @@ Every HTTP step in `apps/api/src/steps/**` mounts:
 middleware: [securityHeaders, rateLimiter, apiKeyAuth, wideEventMiddleware]
 ```
 
-Webhook steps skip `rateLimiter` (HMAC is the gate, and a legitimate
-batch burst must not 429). The public health endpoint
-(`/api/v1/health`) skips `apiKeyAuth` via path bypass; the bypass is
-path-based only, never header-based.
+Webhook steps skip `rateLimiter` so a legitimate batch burst from
+HappyRobot cannot 429; `x-api-key` is still enforced via the global
+`apiKeyAuth` plugin. The public health endpoint (`/api/v1/health`) skips
+`apiKeyAuth` via path bypass; the bypass is path-based only, never
+header-based.
 
 `securityHeaders` sets `X-Content-Type-Options`, `X-Frame-Options`,
 `Referrer-Policy`, and `Strict-Transport-Security` on every response,
@@ -85,11 +90,14 @@ only.
 
 ## Known caveats
 
-- **Webhook raw body**: Motia 1.0.0 does not expose a raw body on
-  `ApiRequest`. `call-completed.step.ts` HMACs `JSON.stringify(req.body)`
-  and documents the TODO in its header. The length-guard fix is in
-  place, so a mismatched-length signature returns 401 cleanly instead
-  of throwing.
+- **Webhook signature is telemetry, not auth**: `x-api-key` is the only
+  gate on `/api/v1/webhooks/call-completed`. When `x-webhook-signature`
+  is present the route HMACs the raw body with `WEBHOOK_SECRET` and
+  records the outcome (`signature_state=valid|invalid`); when absent,
+  it records `signature_state=absent`. None of these short-circuit the
+  response. `WEBHOOK_SECRET` is optional and defaults to empty; with
+  an empty secret the verifier always returns `false` so "valid" never
+  leaks through.
 - **Rate limiter state**: in-process `Map` keyed by `x-api-key`. Each
   worker has its own budget. Move to Redis if horizontal scaling
   becomes a real need (Redis is already in the stack).

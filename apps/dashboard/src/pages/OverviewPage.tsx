@@ -1,7 +1,19 @@
-import { KpiCard } from '@/components/KpiCard'
+import { EmptyState } from '@/components/EmptyState'
+import { SectionHeader } from '@/components/SectionHeader'
+import { StatCard } from '@/components/StatCard'
+import { PageLayout } from '@/components/layout/PageLayout'
 import { formatCurrency, formatPercent } from '@/lib/formatters'
 import { api } from '@carrier-sales/convex/convex/_generated/api'
 import { useQuery } from 'convex/react'
+import {
+  BarChart3,
+  CheckCircle2,
+  DollarSign,
+  PhoneCall,
+  PieChart as PieChartIcon,
+  Repeat,
+  TrendingUp,
+} from 'lucide-react'
 import {
   Bar,
   BarChart,
@@ -43,17 +55,17 @@ type MetricsHistoryRow = {
 
 const OUTCOME_PIE_COLORS: Record<string, string> = {
   booked: '#10b981',
-  declined: '#f97316',
-  no_match: '#6b7280',
-  transferred: '#3b82f6',
+  declined: '#f43f5e',
+  no_match: '#94a3b8',
+  transferred: '#0ea5e9',
   dropped: '#ef4444',
 }
 
 const SENTIMENT_BAR_COLORS: Record<string, string> = {
   positive: '#10b981',
-  neutral: '#9ca3af',
-  negative: '#f97316',
-  frustrated: '#ef4444',
+  neutral: '#94a3b8',
+  negative: '#f59e0b',
+  frustrated: '#f43f5e',
 }
 
 const KPI_SKELETON_KEYS = ['kpi-a', 'kpi-b', 'kpi-c', 'kpi-d'] as const
@@ -76,6 +88,8 @@ export function OverviewPage() {
       total_calls: row.total_calls,
     })) ?? []
 
+  const sparkSeries = history?.map((row) => row.total_calls) ?? []
+
   const pieData = summary
     ? (
         [
@@ -95,21 +109,9 @@ export function OverviewPage() {
   const sentimentRows = summary
     ? (
         [
-          {
-            key: 'positive',
-            name: 'Positive',
-            count: summary.sentiment_distribution.positive,
-          },
-          {
-            key: 'neutral',
-            name: 'Neutral',
-            count: summary.sentiment_distribution.neutral,
-          },
-          {
-            key: 'negative',
-            name: 'Negative',
-            count: summary.sentiment_distribution.negative,
-          },
+          { key: 'positive', name: 'Positive', count: summary.sentiment_distribution.positive },
+          { key: 'neutral', name: 'Neutral', count: summary.sentiment_distribution.neutral },
+          { key: 'negative', name: 'Negative', count: summary.sentiment_distribution.negative },
           {
             key: 'frustrated',
             name: 'Frustrated',
@@ -118,53 +120,59 @@ export function OverviewPage() {
         ] as const
       ).map((row) => ({
         ...row,
-        fill: SENTIMENT_BAR_COLORS[row.key] ?? '#9ca3af',
+        fill: SENTIMENT_BAR_COLORS[row.key] ?? '#94a3b8',
       }))
     : []
 
   const chartTooltipStyle = {
-    backgroundColor: 'rgb(17 24 39)',
-    border: '1px solid rgb(55 65 81)',
-    borderRadius: '0.5rem',
+    backgroundColor: 'rgb(15 23 42)',
+    border: '1px solid rgb(51 65 85)',
+    borderRadius: '10px',
+    color: '#f8fafc',
   }
-  const chartLabelStyle = { color: 'rgb(209 213 219)' }
+  const chartLabelStyle = { color: 'rgb(226 232 240)' }
+  const hasSentiment = sentimentRows.some((row) => row.count > 0)
 
   return (
-    <div className="space-y-6 p-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight text-gray-900 dark:text-gray-100">
-          Overview
-        </h1>
-        <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-          Carrier sales performance and call analytics
-        </p>
-      </div>
-
+    <PageLayout
+      eyebrow="Command center"
+      title="Overview"
+      description="Carrier sales performance and call analytics at a glance."
+    >
       <div
         className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4"
         data-testid="overview-kpi-grid"
       >
         {summary ? (
           <>
-            <KpiCard
+            <StatCard
               dataTestId="kpi-card-total-calls"
-              title="Total Calls"
+              label="Total Calls"
               value={String(summary.total_calls)}
+              icon={PhoneCall}
+              sparkline={sparkSeries}
+              index={0}
             />
-            <KpiCard
+            <StatCard
               dataTestId="kpi-card-booking-rate"
-              title="Booking Rate"
+              label="Booking Rate"
               value={formatPercent(summary.booking_rate)}
+              icon={TrendingUp}
+              index={1}
             />
-            <KpiCard
+            <StatCard
               dataTestId="kpi-card-revenue-booked"
-              title="Revenue Booked"
+              label="Revenue Booked"
               value={formatCurrency(summary.revenue_booked)}
+              icon={DollarSign}
+              index={2}
             />
-            <KpiCard
+            <StatCard
               dataTestId="kpi-card-avg-rounds"
-              title="Avg Rounds"
+              label="Avg Rounds"
               value={summary.avg_negotiation_rounds.toFixed(1)}
+              icon={Repeat}
+              index={3}
             />
           </>
         ) : (
@@ -173,33 +181,37 @@ export function OverviewPage() {
               <div
                 key={key}
                 data-testid="kpi-skeleton"
-                className="h-32 animate-pulse rounded-xl border border-gray-200 bg-gray-100 dark:border-gray-800 dark:bg-gray-800/80"
+                className="h-32 animate-pulse rounded-xl2 border border-surface-border/70 bg-surface-2"
               />
             ))}
           </>
         )}
       </div>
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <div className="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900 lg:col-span-2">
-          <h2 className="mb-4 text-sm font-medium text-gray-700 dark:text-gray-300">
-            Calls over time
-          </h2>
+      <div className="mt-8 grid grid-cols-1 gap-8 lg:grid-cols-3">
+        <div className="lg:col-span-2">
+          <SectionHeader
+            eyebrow="Volume"
+            title="Calls over time"
+            description="Last 24 sampling intervals."
+          />
           {history ? (
-            <div className="h-72 w-full">
+            <div className="mt-4 h-72 w-full rounded-xl2 border border-surface-border/70 bg-surface-1 p-3">
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={lineData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                <LineChart data={lineData} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
                   <XAxis
                     dataKey="timestamp"
                     tickFormatter={formatChartTime}
-                    stroke="#9ca3af"
-                    tick={{ fill: '#9ca3af', fontSize: 11 }}
+                    stroke="#94a3b8"
+                    tick={{ fill: '#94a3b8', fontSize: 11 }}
                     tickLine={false}
+                    axisLine={false}
                   />
                   <YAxis
-                    stroke="#9ca3af"
-                    tick={{ fill: '#9ca3af', fontSize: 11 }}
+                    stroke="#94a3b8"
+                    tick={{ fill: '#94a3b8', fontSize: 11 }}
                     tickLine={false}
+                    axisLine={false}
                     allowDecimals={false}
                   />
                   <Tooltip
@@ -211,33 +223,32 @@ export function OverviewPage() {
                   <Line
                     type="monotone"
                     dataKey="total_calls"
-                    stroke="#3b82f6"
+                    stroke="#f59e0b"
                     strokeWidth={2}
-                    dot={{ r: 3, fill: '#3b82f6' }}
+                    dot={{ r: 3, fill: '#f59e0b' }}
                     activeDot={{ r: 5 }}
                   />
                 </LineChart>
               </ResponsiveContainer>
             </div>
           ) : (
-            <div className="h-72 animate-pulse rounded-lg bg-gray-100 dark:bg-gray-800/80" />
+            <div className="mt-4 h-72 animate-pulse rounded-xl2 bg-surface-2" />
           )}
         </div>
 
-        <div className="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900">
-          <h2 className="mb-4 text-sm font-medium text-gray-700 dark:text-gray-300">
-            Outcome distribution
-          </h2>
-          {summary === undefined && (
-            <div className="h-72 animate-pulse rounded-lg bg-gray-100 dark:bg-gray-800/80" />
-          )}
-          {summary !== undefined && pieData.length === 0 && (
-            <p className="flex h-72 items-center justify-center text-sm text-gray-500 dark:text-gray-400">
-              No outcome data yet
-            </p>
-          )}
-          {summary !== undefined && pieData.length > 0 && (
-            <div className="h-72 w-full">
+        <div>
+          <SectionHeader eyebrow="Mix" title="Outcome distribution" />
+          {summary === undefined ? (
+            <div className="mt-4 h-72 animate-pulse rounded-xl2 bg-surface-2" />
+          ) : pieData.length === 0 ? (
+            <EmptyState
+              className="mt-4"
+              icon={PieChartIcon}
+              title="No outcome data yet"
+              description="Once calls close, the outcome mix will surface here."
+            />
+          ) : (
+            <div className="mt-4 h-72 w-full rounded-xl2 border border-surface-border/70 bg-surface-1 p-3">
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
                   <Pie
@@ -246,12 +257,13 @@ export function OverviewPage() {
                     nameKey="name"
                     cx="50%"
                     cy="50%"
-                    innerRadius={48}
-                    outerRadius={80}
+                    innerRadius={54}
+                    outerRadius={86}
                     paddingAngle={2}
+                    stroke="none"
                   >
                     {pieData.map((entry) => (
-                      <Cell key={entry.key} fill={OUTCOME_PIE_COLORS[entry.key] ?? '#6b7280'} />
+                      <Cell key={entry.key} fill={OUTCOME_PIE_COLORS[entry.key] ?? '#94a3b8'} />
                     ))}
                   </Pie>
                   <Tooltip
@@ -266,24 +278,37 @@ export function OverviewPage() {
         </div>
       </div>
 
-      <div className="rounded-xl border border-gray-200 bg-white p-4 dark:border-gray-800 dark:bg-gray-900">
-        <h2 className="mb-4 text-sm font-medium text-gray-700 dark:text-gray-300">
-          Sentiment distribution
-        </h2>
-        {summary ? (
-          <div className="h-64 w-full">
+      <div className="mt-8">
+        <SectionHeader
+          eyebrow="Tone"
+          title="Sentiment distribution"
+          description="Live aggregate of carrier sentiment across recent calls."
+        />
+        {summary === undefined ? (
+          <div className="mt-4 h-64 animate-pulse rounded-xl2 bg-surface-2" />
+        ) : !hasSentiment ? (
+          <EmptyState
+            className="mt-4"
+            icon={BarChart3}
+            title="No sentiment signal yet"
+            description="Recorded call sentiment will populate this chart."
+          />
+        ) : (
+          <div className="mt-4 h-64 w-full rounded-xl2 border border-surface-border/70 bg-surface-1 p-3">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={sentimentRows} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
                 <XAxis
                   dataKey="name"
-                  stroke="#9ca3af"
-                  tick={{ fill: '#9ca3af', fontSize: 11 }}
+                  stroke="#94a3b8"
+                  tick={{ fill: '#94a3b8', fontSize: 11 }}
                   tickLine={false}
+                  axisLine={false}
                 />
                 <YAxis
-                  stroke="#9ca3af"
-                  tick={{ fill: '#9ca3af', fontSize: 11 }}
+                  stroke="#94a3b8"
+                  tick={{ fill: '#94a3b8', fontSize: 11 }}
                   tickLine={false}
+                  axisLine={false}
                   allowDecimals={false}
                 />
                 <Tooltip
@@ -291,7 +316,7 @@ export function OverviewPage() {
                   itemStyle={chartLabelStyle}
                   labelStyle={chartLabelStyle}
                 />
-                <Bar dataKey="count" radius={[4, 4, 0, 0]}>
+                <Bar dataKey="count" radius={[6, 6, 0, 0]}>
                   {sentimentRows.map((row) => (
                     <Cell key={row.key} fill={row.fill} />
                   ))}
@@ -299,10 +324,13 @@ export function OverviewPage() {
               </BarChart>
             </ResponsiveContainer>
           </div>
-        ) : (
-          <div className="h-64 animate-pulse rounded-lg bg-gray-100 dark:bg-gray-800/80" />
         )}
       </div>
-    </div>
+
+      <div className="mt-10 flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+        <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" strokeWidth={2} aria-hidden />
+        Live data from Convex — updates automatically.
+      </div>
+    </PageLayout>
   )
 }

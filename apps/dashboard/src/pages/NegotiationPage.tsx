@@ -1,7 +1,11 @@
-import { KpiCard } from '@/components/KpiCard'
+import { EmptyState } from '@/components/EmptyState'
+import { SectionHeader } from '@/components/SectionHeader'
+import { StatCard } from '@/components/StatCard'
+import { PageLayout } from '@/components/layout/PageLayout'
 import { formatCurrency, formatPercent } from '@/lib/formatters'
 import { api } from '@carrier-sales/convex/convex/_generated/api'
 import { useQuery } from 'convex/react'
+import { ChartScatter, Handshake, Percent, Target } from 'lucide-react'
 import { useMemo } from 'react'
 import {
   Bar,
@@ -125,20 +129,11 @@ const emptyAnalytics: NegotiationAnalytics = {
   scatterPoints: [],
 }
 
-function ChartSkeleton({ title }: Readonly<{ title: string }>) {
-  return (
-    <div className="rounded-xl border border-gray-200 bg-white p-6 dark:border-gray-800 dark:bg-gray-900">
-      <h2 className="mb-4 text-sm font-semibold text-gray-900 dark:text-gray-100">{title}</h2>
-      <div className="h-[320px] animate-pulse rounded-lg bg-gray-100 dark:bg-gray-800/80" />
-    </div>
-  )
-}
-
 const chartTooltipStyle = {
-  backgroundColor: 'rgba(17, 24, 39, 0.95)',
-  border: '1px solid rgb(55, 65, 81)',
-  borderRadius: '8px',
-  color: '#f9fafb',
+  backgroundColor: 'rgb(15 23 42)',
+  border: '1px solid rgb(51 65 85)',
+  borderRadius: '10px',
+  color: '#f8fafc',
 }
 
 function scatterTooltipLabel(payload: readonly unknown[] | undefined): string {
@@ -176,113 +171,123 @@ export function NegotiationPage() {
     return computeNegotiationAnalytics(negotiations, callById)
   }, [negotiations, callById])
 
-  return (
-    <div className="space-y-6">
-      <header>
-        <h1 className="text-2xl font-semibold tracking-tight text-gray-900 dark:text-gray-100">
-          Negotiation analytics
-        </h1>
-        <p className="mt-1 text-sm text-gray-600 dark:text-gray-400">
-          Round outcomes, acceptance, and rate positioning across carrier conversations.
-        </p>
-      </header>
+  const hasRoundData = roundDistribution.some((r) => r.count > 0)
 
+  return (
+    <PageLayout
+      eyebrow="Outcomes"
+      title="Negotiation analytics"
+      description="Round outcomes, acceptance, and rate positioning across carrier conversations."
+    >
       {loading ? (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {[0, 1, 2].map((i) => (
             <div
               key={i}
-              className="h-[140px] animate-pulse rounded-xl border border-gray-200 bg-gray-100 dark:border-gray-800 dark:bg-gray-800/80"
+              className="h-[160px] animate-pulse rounded-xl2 border border-surface-border/70 bg-surface-2"
             />
           ))}
         </div>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          <KpiCard
-            title="Total Negotiations"
+          <StatCard
+            label="Total Negotiations"
             value={String(totalDistinctNegotiations)}
-            subtitle="Distinct calls with at least one logged round"
+            icon={Handshake}
+            index={0}
           />
-          <KpiCard
-            title="Acceptance Rate"
+          <StatCard
+            label="Acceptance Rate"
             value={formatPercent(acceptanceRate)}
-            subtitle="Accepted rounds ÷ total rounds"
+            icon={Percent}
+            index={1}
           />
-          <KpiCard
-            title="Avg Rounds to Close"
+          <StatCard
+            label="Avg Rounds to Close"
             value={avgRoundsToClose > 0 ? avgRoundsToClose.toFixed(1) : '—'}
-            subtitle="Among calls with an accepted round"
+            icon={Target}
+            index={2}
           />
         </div>
       )}
 
-      {loading ? (
-        <div className="grid gap-6 lg:grid-cols-2">
-          <ChartSkeleton title="Negotiation round distribution" />
-          <ChartSkeleton title="Offered vs counter rate by round" />
-        </div>
-      ) : (
-        <div className="grid gap-6 lg:grid-cols-2">
-          <div className="rounded-xl border border-gray-200 bg-white p-6 dark:border-gray-800 dark:bg-gray-900">
-            <h2 className="mb-4 text-sm font-semibold text-gray-900 dark:text-gray-100">
-              Negotiation round distribution
-            </h2>
-            <div className="h-[320px] w-full">
+      <div className="mt-8 grid gap-8 lg:grid-cols-2">
+        <div>
+          <SectionHeader eyebrow="Closing" title="Negotiation round distribution" />
+          {loading ? (
+            <div className="mt-4 h-[320px] animate-pulse rounded-xl2 bg-surface-2" />
+          ) : !hasRoundData ? (
+            <EmptyState
+              className="mt-4"
+              icon={Target}
+              title="No rounds logged yet"
+              description="Round history will appear once negotiations begin closing."
+            />
+          ) : (
+            <div className="mt-4 h-[320px] w-full rounded-xl2 border border-surface-border/70 bg-surface-1 p-3">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart
                   data={roundDistribution}
                   margin={{ top: 8, right: 8, bottom: 8, left: 8 }}
                 >
-                  <CartesianGrid
-                    strokeDasharray="3 3"
-                    className="stroke-gray-200 dark:stroke-gray-700"
-                  />
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgb(148 163 184 / 0.2)" />
                   <XAxis
                     dataKey="round"
-                    tick={{ fill: 'currentColor', fontSize: 12 }}
-                    className="text-gray-600 dark:text-gray-400"
+                    tick={{ fill: '#94a3b8', fontSize: 11 }}
+                    tickLine={false}
+                    axisLine={false}
                   />
                   <YAxis
                     allowDecimals={false}
-                    tick={{ fill: 'currentColor', fontSize: 12 }}
-                    className="text-gray-600 dark:text-gray-400"
+                    tick={{ fill: '#94a3b8', fontSize: 11 }}
+                    tickLine={false}
+                    axisLine={false}
                   />
                   <Tooltip
                     contentStyle={chartTooltipStyle}
-                    labelStyle={{ color: '#f9fafb' }}
+                    labelStyle={{ color: '#e2e8f0' }}
+                    itemStyle={{ color: '#e2e8f0' }}
                     formatter={(value: number) => [value, 'Calls']}
                   />
-                  <Bar dataKey="count" fill="#10b981" radius={[6, 6, 0, 0]} name="Calls" />
+                  <Bar dataKey="count" fill="#f59e0b" radius={[6, 6, 0, 0]} name="Calls" />
                 </BarChart>
               </ResponsiveContainer>
             </div>
-          </div>
+          )}
+        </div>
 
-          <div className="rounded-xl border border-gray-200 bg-white p-6 dark:border-gray-800 dark:bg-gray-900">
-            <h2 className="mb-4 text-sm font-semibold text-gray-900 dark:text-gray-100">
-              Offered vs counter rate by round
-            </h2>
-            <div className="h-[320px] w-full">
+        <div>
+          <SectionHeader eyebrow="Positioning" title="Offered vs counter rate by round" />
+          {loading ? (
+            <div className="mt-4 h-[320px] animate-pulse rounded-xl2 bg-surface-2" />
+          ) : scatterPoints.length === 0 ? (
+            <EmptyState
+              className="mt-4"
+              icon={ChartScatter}
+              title="No counter rates yet"
+              description="Points will appear here once carriers counter with a rate."
+            />
+          ) : (
+            <div className="mt-4 h-[320px] w-full rounded-xl2 border border-surface-border/70 bg-surface-1 p-3">
               <ResponsiveContainer width="100%" height="100%">
                 <ScatterChart margin={{ top: 8, right: 8, bottom: 8, left: 8 }}>
-                  <CartesianGrid
-                    strokeDasharray="3 3"
-                    className="stroke-gray-200 dark:stroke-gray-700"
-                  />
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgb(148 163 184 / 0.2)" />
                   <XAxis
                     type="number"
                     dataKey="offered_rate"
                     name="Offered"
-                    tick={{ fill: 'currentColor', fontSize: 12 }}
-                    className="text-gray-600 dark:text-gray-400"
+                    tick={{ fill: '#94a3b8', fontSize: 11 }}
+                    tickLine={false}
+                    axisLine={false}
                     tickFormatter={(v: number) => formatCurrency(v)}
                   />
                   <YAxis
                     type="number"
                     dataKey="counter_rate"
                     name="Counter"
-                    tick={{ fill: 'currentColor', fontSize: 12 }}
-                    className="text-gray-600 dark:text-gray-400"
+                    tick={{ fill: '#94a3b8', fontSize: 11 }}
+                    tickLine={false}
+                    axisLine={false}
                     tickFormatter={(v: number) => formatCurrency(v)}
                   />
                   <Tooltip
@@ -290,18 +295,13 @@ export function NegotiationPage() {
                     formatter={(value: number, name: string) => [formatCurrency(value), name]}
                     labelFormatter={(_, payload) => scatterTooltipLabel(payload)}
                   />
-                  <Scatter data={scatterPoints} fill="#34d399" />
+                  <Scatter data={scatterPoints} fill="#10b981" />
                 </ScatterChart>
               </ResponsiveContainer>
             </div>
-            {scatterPoints.length === 0 && (
-              <p className="mt-2 text-center text-xs text-gray-500 dark:text-gray-400">
-                No rounds with a counter rate yet.
-              </p>
-            )}
-          </div>
+          )}
         </div>
-      )}
-    </div>
+      </div>
+    </PageLayout>
   )
 }

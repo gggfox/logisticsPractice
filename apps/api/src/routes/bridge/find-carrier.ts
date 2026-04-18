@@ -17,6 +17,10 @@ const findCarrierRoute: FastifyPluginAsync = async (app) => {
     '/api/v1/carriers/:mc_number',
     {
       schema: {
+        tags: ['carriers'],
+        summary: 'Verify a carrier via FMCSA',
+        description:
+          'Looks up a carrier by DOT number against FMCSA QCMobile and enqueues an enrichment job on eligibility. Note: the path parameter is a DOT number -- FMCSA treats the QCMobile carriers/{id} endpoint as a DOT lookup, not an MC docket.',
         params: ParamsSchema,
         response: {
           200: CarrierVerificationResponseSchema,

@@ -16,6 +16,10 @@ const findLoadsRoute: FastifyPluginAsync = async (app) => {
     '/api/v1/loads',
     {
       schema: {
+        tags: ['loads'],
+        summary: 'Search available loads',
+        description:
+          'Searches Convex for available loads. All query parameters are optional filters. Response omits the `loads[]` schema because Convex widens `equipment_type`; the canonical contract lives in `@carrier-sales/shared`.',
         querystring: LoadSearchParamsSchema,
       },
     },

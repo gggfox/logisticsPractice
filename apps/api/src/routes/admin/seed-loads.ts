@@ -84,6 +84,10 @@ const seedLoadsRoute: FastifyPluginAsync = async (app) => {
     '/api/v1/admin/seed',
     {
       schema: {
+        tags: ['admin'],
+        summary: 'Seed demo loads into Convex',
+        description:
+          'Idempotently upserts a deterministic set of sample loads for demos and E2E tests. Requires the admin key -- the bridge key is rejected with 403.',
         body: BodySchema,
         response: {
           200: ResponseSchema,

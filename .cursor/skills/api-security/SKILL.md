@@ -116,7 +116,15 @@ Reference: [rate-limiter.ts](../../../apps/api/src/middleware/rate-limiter.ts).
 
 ## Webhook signature verification
 
-Reference: [call-completed.step.ts](../../../apps/api/src/steps/webhooks/call-completed.step.ts).
+Reference: [call-completed.ts](../../../apps/api/src/routes/webhooks/call-completed.ts)
+and [hmac.ts](../../../apps/api/src/plugins/hmac.ts).
+
+**`x-api-key` is the auth gate, not the signature.** HappyRobot's
+workflow webhook UI only supports static headers, so signing per-body
+isn't possible in the current platform. The call-completed route
+therefore treats `x-webhook-signature` as telemetry -- recorded on the
+wide event and on `carrier_sales.webhook.received` but never a reason
+to 401. `apiKeyAuth` already enforces auth globally.
 
 ```ts
 import crypto from 'node:crypto'
@@ -124,6 +132,7 @@ import crypto from 'node:crypto'
 function verifyWebhookSignature(rawBody: string, signature: string | undefined): boolean {
   if (!signature) return false
   const secret = appConfig.bridge.webhookSecret
+  if (secret === '') return false // unset secret must never read "valid"
   const expected = crypto.createHmac('sha256', secret).update(rawBody).digest('hex')
   const sigBuf = Buffer.from(signature, 'hex')
   const expBuf = Buffer.from(expected, 'hex')
@@ -132,29 +141,36 @@ function verifyWebhookSignature(rawBody: string, signature: string | undefined):
 }
 ```
 
-The three mistakes this guards against:
+Mistakes this guards against:
 
 1. **Length mismatch throws.** `timingSafeEqual` on unequal-length
    buffers throws `ERR_CRYPTO_TIMING_SAFE_EQUAL_INVALID_LENGTH`. That
-   turns into a 500 (and unlogged signature failure). Always
+   turns into a 500 and an unlogged signature failure. Always
    length-guard first.
-2. **`JSON.stringify(req.body)` reorders keys.** HMAC is computed
-   client-side over the exact bytes the client sent. If you
-   re-serialize, any key reordering or whitespace difference flips the
-   hash. Use the raw body. The current `call-completed.step.ts` uses
-   `JSON.stringify(req.body)` as a shortcut -- it works only because
-   HappyRobot and Node emit keys in the same order today. If you're
-   adding a new webhook, get the raw body instead (Motia exposes it on
-   the request; check the platform version in use).
-3. **Missing signature header.** Short-circuit to `false`; do not
-   compute HMAC on an empty string and compare.
+2. **Re-serialized body.** HMAC is computed client-side over the exact
+   bytes sent. Re-serializing via `JSON.stringify(req.body)` flips the
+   hash on any key reordering. Use `fastify-raw-body` to grab
+   `req.rawBody` (enabled per-route with `config: { rawBody: true }`).
+3. **Missing / unconfigured secret.** Short-circuit to `false`; never
+   treat a missing signature header or an empty `WEBHOOK_SECRET` as a
+   valid state.
 
-After verification, always:
+Route-side pattern:
 
-- `enrichWideEvent(ctx, { signature_valid: boolean })`
-- `webhookReceivedCounter.add(1, { signature_valid: 'true' | 'false' })`
-- On `false`, `logger.warn('Invalid webhook signature')` -- this
-  stands alone from the wide event because it needs real-time alerting.
+```ts
+const hasSignature = typeof req.headers['x-webhook-signature'] === 'string'
+const signatureState: 'valid' | 'invalid' | 'absent' = hasSignature
+  ? verifyWebhookSignature(req) ? 'valid' : 'invalid'
+  : 'absent'
+
+enrichWideEvent(req, { signature_state: signatureState })
+webhookReceivedCounter.add(1, { signature_state: signatureState, status: payload.status })
+```
+
+If you wire a *new* webhook that really is signature-gated (e.g. one
+routed through a signing proxy), use the `hmacVerifier` fastify plugin
+in [hmac.ts](../../../apps/api/src/plugins/hmac.ts), which 401s on
+failure. Do **not** re-introduce 401s on the HappyRobot route.
 
 ## Secrets
 
@@ -215,4 +231,5 @@ admin traffic in queries without revealing the secret.
 - [ ] 401 response body is the shared `{ error, message, statusCode }`
 - [ ] No `process.env.*` outside `config.ts`
 - [ ] Secrets never appear in logs, responses, or thrown messages
-- [ ] `signature_valid` is on the wide event + the metric
+- [ ] `signature_state` (not `signature_valid`) is on the wide event
+      and metric; the call-completed route never 401s on it

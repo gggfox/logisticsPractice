@@ -22,6 +22,11 @@ const healthRoute: FastifyPluginAsync = async (app) => {
     '/api/v1/health',
     {
       schema: {
+        tags: ['internal'],
+        summary: 'Liveness probe',
+        description:
+          'Public health probe used by container runtimes and Traefik. Bypasses API-key auth.',
+        security: [],
         response: { 200: HealthResponseSchema },
       },
     },

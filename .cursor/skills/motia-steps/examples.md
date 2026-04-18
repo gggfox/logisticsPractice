@@ -160,22 +160,15 @@ export const config = {
 } as const satisfies StepConfig
 
 export const handler: Handlers<typeof config> = async (req, ctx) => {
-  const rawBody = JSON.stringify(req.body)
-  const signature = req.headers['x-webhook-signature'] as string | undefined
-  const expected = crypto.createHmac('sha256', appConfig.bridge.webhookSecret).update(rawBody).digest('hex')
-  const signatureValid = signature
-    ? crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))
-    : false
-  enrichWideEvent(ctx, { signature_valid: signatureValid })
-
-  if (!signatureValid) {
-    webhookReceivedCounter.add(1, { signature_valid: 'false' })
-    ctx.logger.warn('Invalid webhook signature')
-    return {
-      status: 401,
-      body: { error: 'Unauthorized', message: 'Invalid webhook signature', statusCode: 401 },
-    }
-  }
+  // HappyRobot can only send static headers, so `x-api-key` (already
+  // enforced by apiKeyAuth) is the auth gate. The HMAC is optional
+  // telemetry: record the outcome but never 401 on it.
+  const signature = req.headers['x-webhook-signature']
+  const hasSignature = typeof signature === 'string'
+  const signatureState: 'valid' | 'invalid' | 'absent' = hasSignature
+    ? verifyWebhookSignature(req) ? 'valid' : 'invalid'
+    : 'absent'
+  enrichWideEvent(ctx, { signature_state: signatureState })
 
   const parsed = CallWebhookPayloadSchema.safeParse(req.body)
   if (!parsed.success) {
@@ -186,15 +179,21 @@ export const handler: Handlers<typeof config> = async (req, ctx) => {
     }
   }
 
+  webhookReceivedCounter.add(1, {
+    signature_state: signatureState,
+    status: parsed.data.status,
+  })
   enrichWideEvent(ctx, { call_id: parsed.data.call_id, call_status: parsed.data.status })
   await ctx.enqueue({ topic: 'call.completed', data: parsed.data })
   return { status: 200, body: { received: true } }
 }
 ```
 
-Takeaways: middleware is `[apiKeyAuth, wideEventMiddleware]` only,
-`logger.warn` is kept because a bad signature is an independent alertable
-signal.
+Takeaways: middleware is `[apiKeyAuth, wideEventMiddleware]` only; the
+signature is telemetry (`signature_state`), not an auth gate. If you
+*do* need a signature-gated webhook (signing proxy, non-HappyRobot
+platform), use the `hmacVerifier` fastify plugin from
+`apps/api/src/plugins/hmac.ts`, which 401s on failure.
 
 ## 4. Queue consumer (processing)
 

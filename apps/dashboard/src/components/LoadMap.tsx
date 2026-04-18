@@ -130,10 +130,5 @@ export function LoadMap({ loads }: LoadMapProps) {
     }
   }, [loads])
 
-  return (
-    <div
-      ref={mapRef}
-      className="h-[500px] w-full rounded-xl border border-gray-200 dark:border-gray-800"
-    />
-  )
+  return <div ref={mapRef} className="h-[500px] w-full" />
 }

@@ -17,6 +17,10 @@ const findLoadRoute: FastifyPluginAsync = async (app) => {
     '/api/v1/loads/:load_id',
     {
       schema: {
+        tags: ['loads'],
+        summary: 'Get a load by load_id',
+        description:
+          'Returns a single load record from Convex. Response schema is not enforced here because Convex widens `equipment_type` to a string; the authoritative contract lives in `@carrier-sales/shared`.',
         params: ParamsSchema,
       },
     },

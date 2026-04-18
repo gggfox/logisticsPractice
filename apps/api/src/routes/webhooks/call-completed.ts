@@ -14,31 +14,32 @@ const callCompletedRoute: FastifyPluginAsync = async (app) => {
   app.withTypeProvider<ZodTypeProvider>().post(
     '/api/v1/webhooks/call-completed',
     {
-      // Capture the raw body so the HMAC verifier can digest the exact
-      // bytes HappyRobot signed instead of a re-serialized copy.
+      // Capture the raw body so that when `x-webhook-signature` is sent we
+      // can HMAC the exact bytes the caller signed. HappyRobot's workflow
+      // webhook UI only supports static headers and cannot sign per-request,
+      // so the signature is optional telemetry -- `x-api-key` (enforced by
+      // the global auth plugin) is the only auth gate.
       config: { rawBody: true },
       schema: {
+        tags: ['webhooks'],
+        summary: 'Inbound HappyRobot call-completed webhook',
+        description:
+          'Authenticated via `x-api-key` like every other route. `x-webhook-signature` is optional telemetry: if present we record whether it verifies against `WEBHOOK_SECRET`, but it never gates the response. Fans out to the classify and sentiment-analysis BullMQ queues.',
+        security: [{ apiKey: [] }],
         body: CallWebhookPayloadSchema,
         response: {
           200: WebhookAckSchema,
-          401: ErrorBodySchema,
           500: ErrorBodySchema,
         },
       },
     },
     async (req, reply) => {
-      const signatureValid = verifyWebhookSignature(req)
-      enrichWideEvent(req, { signature_valid: signatureValid })
-
-      if (!signatureValid) {
-        webhookReceivedCounter.add(1, { signature_valid: 'false' })
-        req.log.warn('Invalid webhook signature')
-        return reply.code(401).send({
-          error: 'Unauthorized',
-          message: 'Invalid webhook signature',
-          statusCode: 401,
-        })
+      const hasSignature = typeof req.headers['x-webhook-signature'] === 'string'
+      let signatureState: 'valid' | 'invalid' | 'absent' = 'absent'
+      if (hasSignature) {
+        signatureState = verifyWebhookSignature(req) ? 'valid' : 'invalid'
       }
+      enrichWideEvent(req, { signature_state: signatureState })
 
       const payload = req.body
       enrichWideEvent(req, {
@@ -50,7 +51,7 @@ const callCompletedRoute: FastifyPluginAsync = async (app) => {
         duration_seconds: payload.duration_seconds,
       })
       webhookReceivedCounter.add(1, {
-        signature_valid: 'true',
+        signature_state: signatureState,
         status: payload.status,
       })
 

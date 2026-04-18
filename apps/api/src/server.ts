@@ -23,9 +23,15 @@ import { shutdownOtel } from './otel.js'
 
 import cors from '@fastify/cors'
 import sensible from '@fastify/sensible'
+import fastifySwagger from '@fastify/swagger'
+import fastifySwaggerUi from '@fastify/swagger-ui'
 import Fastify, { type FastifyError } from 'fastify'
 import rawBody from 'fastify-raw-body'
-import { serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod'
+import {
+  jsonSchemaTransform,
+  serializerCompiler,
+  validatorCompiler,
+} from 'fastify-type-provider-zod'
 import { config } from './config.js'
 import {
   startAggregateMetricsCron,
@@ -73,6 +79,40 @@ export async function buildServer() {
   await app.register(rateLimiter)
   await app.register(apiKeyAuth)
   await app.register(wideEvent)
+
+  // OpenAPI spec + Swagger UI. Registered after api-key-auth so the
+  // /docs and /docs/json routes inherit the same auth preHandler;
+  // the auth plugin accepts an `?api_key=` query fallback scoped to
+  // /docs/** so a browser can load the UI without custom headers.
+  await app.register(fastifySwagger, {
+    openapi: {
+      openapi: '3.1.0',
+      info: {
+        title: 'Carrier Sales Bridge API',
+        version: config.observability.version,
+        description:
+          'Fastify bridge between HappyRobot voice agents and Convex. All /api/v1 routes require an `x-api-key` header.',
+      },
+      components: {
+        securitySchemes: {
+          apiKey: { type: 'apiKey', in: 'header', name: 'x-api-key' },
+          webhookSignature: {
+            type: 'apiKey',
+            in: 'header',
+            name: 'x-webhook-signature',
+          },
+        },
+      },
+      security: [{ apiKey: [] }],
+    },
+    transform: jsonSchemaTransform,
+  })
+
+  await app.register(fastifySwaggerUi, {
+    routePrefix: '/docs',
+    uiConfig: { persistAuthorization: true, docExpansion: 'list' },
+    staticCSP: true,
+  })
 
   await app.register(routes)
 

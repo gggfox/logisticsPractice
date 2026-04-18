@@ -34,7 +34,7 @@ Format: `carrier_sales.<domain>.<event>`, snake_case, singular noun.
 | `carrier_sales.negotiation.rounds` | histogram | `rounds` | Rounds taken until accept/max/decline |
 | `carrier_sales.booking.outcome` | counter | -- | Offer outcomes tagged by `result` |
 | `carrier_sales.carrier.verification` | counter | -- | FMCSA verifications tagged by `eligible` |
-| `carrier_sales.webhook.received` | counter | -- | Inbound webhooks tagged by `signature_valid` / `status` |
+| `carrier_sales.webhook.received` | counter | -- | Inbound webhooks tagged by `signature_state` (valid/invalid/absent) and `status` |
 | `carrier_sales.sentiment` | counter | -- | Sentiments from transcript classification |
 | `carrier_sales.call.outcome` | counter | -- | Call outcomes from transcript classification |
 | `carrier_sales.load.search.results` | histogram | `loads` | Loads returned per search |
@@ -72,7 +72,7 @@ outcome          -- overall disposition of a process ('success' | 'error' | 'rej
 result           -- offer-specific ('accepted' | 'countered' | 'max_reached' | 'declined')
 sentiment        -- from SENTIMENTS enum
 round            -- negotiation round, String(n), 1..MAX_NEGOTIATION_ROUNDS
-signature_valid  -- 'true' | 'false'
+signature_state  -- 'valid' | 'invalid' | 'absent' (webhook HMAC outcome)
 status           -- call / webhook status from the shared enums
 eligible         -- 'true' | 'false'
 ```

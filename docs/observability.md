@@ -84,7 +84,7 @@ BullMQ worker / cron tick.
 | `FindLoads`                  | `origin`, `destination`, `equipment_type`, `pickup_date`, `result_count` |
 | `FindCarrier`                | `mc_number`, `eligible`, `legal_name`, `operating_status`, `reason`, `enqueued_enrichment` |
 | `LogOffer`                   | `call_id`, `load_id`, `carrier_mc`, `round`, `offered_rate`, `counter_rate`, `accepted`, `loadboard_rate`, `max_rounds_reached`, `discount_percent` |
-| `CallCompletedWebhook`       | `call_id`, `signature_valid`, `call_status`, `has_transcript`, `duration_seconds`, `enqueued` |
+| `CallCompletedWebhook`       | `call_id`, `signature_state`, `call_status`, `has_transcript`, `duration_seconds`, `enqueued` |
 | `GetCallTranscript`          | `call_id`, `transcript_length`                                           |
 | `HealthCheck`                | `probe: true`                                                            |
 | `SeedLoads`                  | `admin_auth_ok`, `seeded_count`                                          |

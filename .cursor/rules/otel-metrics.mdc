@@ -28,7 +28,7 @@ explicit `description`. Histograms also get `unit`.
 
 ## Attribute keys (closed list)
 
-Allowed: `outcome`, `result`, `sentiment`, `round`, `signature_valid`,
+Allowed: `outcome`, `result`, `sentiment`, `round`, `signature_state`,
 `status`, `eligible`. Adding a key is a design decision -- discuss
 before merging.
 
@@ -40,6 +40,8 @@ Allowed:
 - Enums from `packages/shared/src/constants` (`CALL_OUTCOMES`,
   `SENTIMENTS`, `LOAD_STATUSES`).
 - Small ints stringified: `round: String(n)` where `n <= 10`.
+- Fixed string enums declared inline at the call site (e.g.
+  `signature_state: 'valid' | 'invalid' | 'absent'`).
 
 Forbidden -- these belong on the **wide event**, not metric attributes:
 
@@ -62,7 +64,7 @@ Forbidden -- these belong on the **wide event**, not metric attributes:
 // GOOD
 bookingOutcomeCounter.add(1, { result: 'accepted', round: String(round) })
 negotiationRoundsHistogram.record(round)
-webhookReceivedCounter.add(1, { signature_valid: 'true', status: parsed.data.status })
+webhookReceivedCounter.add(1, { signature_state: 'valid', status: parsed.data.status })
 
 // BAD -- high-cardinality attrs
 bookingOutcomeCounter.add(1, { call_id, load_id })
