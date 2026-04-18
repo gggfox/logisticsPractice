@@ -1,0 +1,26 @@
+meta {
+  name: Admin seed
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/api/v1/admin/seed
+  body: json
+  auth: none
+}
+
+headers {
+  x-api-key: {{adminKey}}
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "count": 50
+  }
+}
+
+docs {
+  Seed demo loads (admin only - uses ADMIN_API_KEY).
+}

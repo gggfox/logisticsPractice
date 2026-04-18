@@ -24,7 +24,7 @@ Quick reference: `.cursor/rules/testing.mdc`. Reference tests:
 | Question | Answer |
 | --- | --- |
 | Pure function (no I/O, no Date, no random)? | Vitest, co-located. |
-| Motia step that only wires a service? | Do not test in isolation. Extract the pure part, test *that*. |
+| Fastify route that only wires a service? | Do not test in isolation. Extract the pure part, test *that*. |
 | Convex query / mutation? | Convex has its own harness; skip until / unless needed. |
 | Dashboard page renders + a user can navigate? | Playwright e2e. |
 | Visual / layout regression? | Not covered; don't add without discussion. |
@@ -124,7 +124,7 @@ afterAll(() => server.close())
 ### Coverage
 
 - `--coverage` runs in CI but nothing gates on it.
-- Don't chase 100% on pass-through code (Motia steps that `return
+- Don't chase 100% on pass-through code (Fastify routes that `return
   await service.foo()`). Those are covered by e2e, not unit.
 - Do aim for 100% on pure domain logic (negotiation, eligibility).
 

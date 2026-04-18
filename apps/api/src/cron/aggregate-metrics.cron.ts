@@ -139,8 +139,8 @@ let job: Cron | null = null
 
 export function startAggregateMetricsCron(): void {
   if (job) return
-  // Match Motia behavior: hourly on the hour, single concurrent run,
-  // swallow errors so the scheduler keeps ticking.
+  // Hourly on the hour, single concurrent run, swallow errors so the
+  // scheduler keeps ticking.
   job = new Cron('0 * * * *', { protect: true }, () => {
     runAggregation().catch((err) => {
       logger.error({ err }, 'aggregate-metrics cron tick failed')

@@ -1,6 +1,6 @@
 ---
 name: otel-metrics
-description: Author and modify OpenTelemetry metrics in apps/api with low-cardinality attributes, canonical names, and the right histogram/counter split. Use when adding a new counter or histogram, editing apps/api/src/observability/metrics.ts, wiring a metric call inside a Motia step, or debugging a blown-up metrics bill / cardinality explosion in SigNoz.
+description: Author and modify OpenTelemetry metrics in apps/api with low-cardinality attributes, canonical names, and the right histogram/counter split. Use when adding a new counter or histogram, editing apps/api/src/observability/metrics.ts, wiring a metric call inside a Fastify route or worker, or debugging a blown-up metrics bill / cardinality explosion in SigNoz.
 ---
 
 # OTel metrics

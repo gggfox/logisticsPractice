@@ -5,8 +5,9 @@ description: Author and modify Dockerfiles, docker-compose.yml, and Dokploy depl
 
 # Docker + Dokploy
 
-Two images ship: `apps/api/Dockerfile` (Motia bundle running on Bun)
-and `apps/dashboard/Dockerfile` (Vite static bundle served by nginx).
+Two images ship: `apps/api/Dockerfile` (Fastify server running on
+Node 22 via `pnpm deploy`) and `apps/dashboard/Dockerfile` (Vite
+static bundle served by nginx).
 Both are built by Dokploy from the monorepo root on push to `main`.
 This skill captures the conventions.
 
@@ -18,11 +19,11 @@ Quick reference: `.cursor/rules/docker-dokploy.mdc`. Runbook:
 | | API | Dashboard |
 | --- | --- | --- |
 | Builder | `node:22-alpine` + pnpm | `node:22-alpine` + pnpm |
-| Runner | `oven/bun:1.1-slim` | `nginx:1.27-alpine` |
-| Entrypoint | `iii --config config.yaml` | `nginx -g 'daemon off;'` (image default) |
+| Runner | `node:22-alpine` + tini | `nginx:1.27-alpine` |
+| Entrypoint | `node --enable-source-maps dist/server.js` (under `tini`) | `nginx -g 'daemon off;'` (image default) |
 | Non-root | yes (`appuser:1001`) | **no** (gap -- fix when touching) |
 | Healthcheck | `GET /api/v1/health` | `GET /` |
-| Ports | 3111 (http), 3112 (stream) | 80 |
+| Ports | 3111 (http) | 80 |
 | Build-time args | -- | `VITE_CONVEX_URL` |
 
 ## Multi-stage template
@@ -80,44 +81,50 @@ locally (which updates the lockfile), commit both `package.json` and
 
 ## Runner stages
 
-### API runner (`oven/bun:1.1-slim`)
+### API runner (`node:22-alpine`)
 
-Why Bun: Motia's production bundle is shipped as a single
-`index-production.js` and Bun's start time beats Node for tiny scripts.
-The `iii` CLI (Motia's runtime) is installed in a separate stage:
-
-```dockerfile
-FROM debian:bookworm-slim AS iii-installer
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl ca-certificates && rm -rf /var/lib/apt/lists/*
-RUN curl -fsSL https://install.iii.dev/iii/main/install.sh | VERSION=0.10.0 sh
-```
-
-`VERSION=0.10.0` is **pinned**. Do not bump drive-by. A version bump
-is a standalone commit with a note on what's new.
-
-Then:
+The builder runs `pnpm --filter @carrier-sales/api deploy --prod
+--legacy /prod/api`, which materializes a self-contained production
+`node_modules` + `package.json` + `dist/` tree the runner can just
+copy. `--legacy` is required on pnpm v10 because the workspace isn't
+set up with `inject-workspace-packages`.
 
 ```dockerfile
-FROM oven/bun:1.1-slim AS runner
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    wget ca-certificates && rm -rf /var/lib/apt/lists/*
+FROM node:22-alpine AS runner
 
-RUN groupadd --system --gid 1001 appgroup && \
-    useradd --system --uid 1001 --gid appgroup --create-home appuser
+ENV NODE_ENV=production \
+    NPM_CONFIG_UPDATE_NOTIFIER=false
+
+RUN apk add --no-cache wget tini && \
+    addgroup -S -g 1001 appgroup && \
+    adduser -S -u 1001 -G appgroup -h /home/appuser appuser
 
 WORKDIR /app
-COPY --from=iii-installer /root/.local/bin/iii /usr/local/bin/iii
-COPY --from=builder --chown=appuser:appgroup /app/apps/api/dist/index-production.js ./dist/
-COPY --from=builder --chown=appuser:appgroup /app/apps/api/dist/index-production.js.map ./dist/
-COPY --from=builder --chown=appuser:appgroup /app/apps/api/config-production.yaml ./config.yaml
-COPY --from=builder --chown=appuser:appgroup /app/apps/api/package.json ./package.json
+
+COPY --from=builder --chown=appuser:appgroup /prod/api/package.json ./package.json
+COPY --from=builder --chown=appuser:appgroup /prod/api/node_modules ./node_modules
+COPY --from=builder --chown=appuser:appgroup /prod/api/dist ./dist
+
 USER appuser
+
+EXPOSE 3111
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+  CMD wget --no-verbose --tries=1 --spider http://localhost:3111/api/v1/health || exit 1
+
+# tini reaps zombies so BullMQ child processes and OTel workers shut
+# down cleanly on SIGTERM from Dokploy.
+ENTRYPOINT ["/sbin/tini", "--"]
+CMD ["node", "--enable-source-maps", "dist/server.js"]
 ```
 
 `--chown=appuser:appgroup` on every `COPY --from=builder`. Without it
-the files are `root:root` and bun runs as `appuser` -- writes to
-`./dist/` (e.g. sourcemap regeneration) fail at runtime.
+the files are `root:root` and Node runs as `appuser` -- any write
+(log rotation, tmp files) fails at runtime.
+
+Why `tini`: the Fastify server spawns BullMQ workers and the OTel SDK
+holds background timers. Running as PID 1 without `tini` leaves
+zombie children on SIGTERM; Dokploy's container rotation can hang.
 
 ### Dashboard runner (`nginx:1.27-alpine`)
 
@@ -187,7 +194,7 @@ useful:
 
 ```dockerfile
 LABEL org.opencontainers.image.title="Carrier Sales API" \
-      org.opencontainers.image.description="Motia-powered Bridge API for HappyRobot carrier sales automation"
+      org.opencontainers.image.description="Fastify Bridge API for HappyRobot carrier sales automation"
 ```
 
 When adding a third image (worker? docs?) follow the same pattern.
@@ -200,7 +207,7 @@ Local dev mirrors the deploy shape. Keep it minimal:
 services:
   api:
     build: { context: ., dockerfile: apps/api/Dockerfile }
-    ports: ["3111:3111", "3112:3112"]
+    ports: ["3111:3111"]
     env_file: .env
     restart: unless-stopped
     healthcheck: { test: ["CMD", "wget", "--spider", "-q", "http://localhost:3111/api/v1/health"], ... }
@@ -227,7 +234,7 @@ by default.
 - **Attach `signoz-net`** to the API application after creating it;
   OTLP export (`http://signoz-otel-collector:4317`) is on an internal
   Docker network.
-- **`REDIS_URL=redis://redis:6379`** is required by Motia iii; the
+- **`REDIS_URL=redis://redis:6379`** is required by BullMQ; the
   Redis service is a Dokploy template deployed in the same project.
 
 See `docs/dokploy-setup.md` for the full walkthrough.
@@ -238,7 +245,7 @@ See `docs/dokploy-setup.md` for the full walkthrough.
 | --- | --- |
 | `pnpm install` takes 5 minutes on every source change | Source `COPY` is above the manifest `COPY` / `pnpm install` layer -- reorder per the template. |
 | `Module not found: @carrier-sales/shared` in the app build | Shared build is missing or runs after the app build -- chain with `&&` and put shared first. |
-| `Error: Cannot find module 'iii'` on boot | `iii-installer` stage was edited / skipped; check `COPY --from=iii-installer`. |
+| `Error: Cannot find module './config.js'` on boot | `pnpm deploy` output wasn't copied, or the `dist/` build step failed silently -- check `COPY --from=builder /prod/api/dist`. |
 | `EACCES: permission denied` writing sourcemap | `--chown=appuser:appgroup` missing on a `COPY --from=builder`. |
 | Healthcheck fails forever in Dokploy | Path wrong, or `apiKeyAuth` isn't bypassing the health path anymore. |
 | `VITE_CONVEX_URL` is `undefined` in the bundle | It was added as a runtime env, not a Build Arg -- Vite only reads build-time. |
@@ -247,8 +254,8 @@ See `docs/dokploy-setup.md` for the full walkthrough.
 
 When editing an image:
 
-- [ ] Base images unchanged (`node:22-alpine`, `oven/bun:1.1-slim`,
-      `nginx:1.27-alpine`) or the bump has its own commit
+- [ ] Base images unchanged (`node:22-alpine`, `nginx:1.27-alpine`)
+      or the bump has its own commit
 - [ ] Manifest `COPY` before source `COPY`; `pnpm install` between them
 - [ ] `pnpm install --frozen-lockfile` (never `--no-frozen-lockfile`)
 - [ ] Shared build before the app build
@@ -256,4 +263,5 @@ When editing an image:
 - [ ] `HEALTHCHECK` using `wget --spider`
 - [ ] No secrets in `ARG` / `LABEL` / build log
 - [ ] `LABEL org.opencontainers.image.title` + `description` present
-- [ ] `iii` version pin (API only) intentional
+- [ ] API image still uses `pnpm deploy --prod --legacy` to produce
+      the runtime tree; runner copies from `/prod/api`

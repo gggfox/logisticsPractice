@@ -6,7 +6,7 @@ alwaysApply: false
 
 # Zod contracts (`@carrier-sales/shared`)
 
-These schemas are the single source of truth shared by the Motia API
+These schemas are the single source of truth shared by the Fastify API
 (`apps/api`), the Convex DB (`packages/convex`), and the Dashboard
 (`apps/dashboard`). One drift breaks three consumers. Deep-dive:
 `.cursor/skills/zod-contracts/SKILL.md`.
@@ -52,7 +52,7 @@ export const CarrierSchema = z.object({ /* internal */ })
 export const FMCSACarrierResponseSchema = z.object({ content: z.object({ carrier: z.object({ /* raw */ }) }) })
 ```
 
-The Motia step or service is responsible for mapping external -> internal.
+The Fastify route or service is responsible for mapping external -> internal.
 
 ## Adding a field (the three-step contract)
 
@@ -63,20 +63,22 @@ silently drifts:
 2. Convex validator in
    [packages/convex/convex/schema.ts](mdc:packages/convex/convex/schema.ts)
    with matching `v.string() / v.number() / v.optional(...)`.
-3. If the field is returned by an HTTP step, extend its `responseSchema` (or
-   the shared schema it points at) -- the step's `asStepSchema(...)` reuses
-   the same Zod schema, so (1) covers this if you share the schema.
+3. If the field is returned by an HTTP route, extend its
+   `schema.response[<status>]` (or the shared schema it points at) -- the
+   route reuses the same Zod schema, so (1) covers this if you share the
+   schema.
 
 Skipping (2) means Convex throws on insert. Skipping (1) means the API type
 says the field exists but clients get `undefined`.
 
 ## Zod v3 <-> v4 bridge
 
-`@carrier-sales/shared` is on Zod v3; Motia is on Zod v4. The **only**
-allowed cast site is `asStepSchema` in
-[apps/api/src/lib/zod-schema.ts](mdc:apps/api/src/lib/zod-schema.ts). Never
-`as any`, never `as unknown as ...`, never duplicate the helper. Rationale
-in the helper's JSDoc.
+`@carrier-sales/shared` is on Zod v3; some dependencies (including
+`fastify-type-provider-zod`) ship Zod v4 types. The **only** allowed
+cast site is `asStepSchema` in
+[apps/api/src/lib/zod-schema.ts](mdc:apps/api/src/lib/zod-schema.ts).
+Never `as any`, never `as unknown as ...`, never duplicate the helper.
+Rationale in the helper's JSDoc.
 
 ## Don'ts
 

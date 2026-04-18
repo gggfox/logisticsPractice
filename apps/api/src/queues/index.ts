@@ -1,10 +1,9 @@
 /**
  * BullMQ queue producers and shared Redis connection.
  *
- * Replaces Motia's built-in queue. Three separate queues are used instead
- * of one "call.completed" because BullMQ workers sharing a queue name are
- * competing consumers (not fan-out). Publishing to two queues from the
- * webhook route is cheap and explicit:
+ * Three separate queues are used instead of one "call.completed" because
+ * BullMQ workers sharing a queue name are competing consumers (not fan-out).
+ * Publishing to two queues from the webhook route is cheap and explicit:
  *
  *   call.completed.classify  -> ClassifyCall worker
  *   call.completed.sentiment -> AnalyzeSentiment worker

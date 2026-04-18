@@ -1,0 +1,30 @@
+meta {
+  name: Search loads
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/api/v1/loads?origin=Dallas, TX&destination=Chicago, IL&equipment_type=dry_van&pickup_date=2026-04-20
+  body: none
+  auth: none
+}
+
+params:query {
+  origin: Dallas, TX
+  destination: Chicago, IL
+  equipment_type: dry_van
+  pickup_date: 2026-04-20
+}
+
+headers {
+  x-api-key: {{apiKey}}
+  Accept: application/json
+}
+
+docs {
+  Search available loads. All query params are optional filters.
+  Fields returned match requirements.md (load_id, origin, destination,
+  pickup_datetime, delivery_datetime, equipment_type, loadboard_rate,
+  notes, weight, commodity_type, num_of_pieces, miles, dimensions).
+}

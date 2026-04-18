@@ -11,9 +11,9 @@ Deep-dive: `.cursor/skills/docker-dokploy/SKILL.md`. Live docs:
 
 ## Base images (pin, don't drift)
 
-- API runner: `oven/bun:1.1-slim`
+- API runner: `node:22-alpine` (with `tini` as PID 1)
 - Dashboard runner: `nginx:1.27-alpine`
-- Builder (both): `node:22-alpine` + `corepack enable && corepack prepare pnpm@latest`
+- Builder (both): `node:22-alpine` + `corepack enable && corepack prepare pnpm@10.30.3 --activate`
 
 Swapping a base image is a supply-chain change. Don't bump casually.
 
@@ -52,9 +52,9 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
   CMD wget --no-verbose --tries=1 --spider http://localhost:<port>/<path> || exit 1
 ```
 
-Use `wget --spider`, not `curl` -- neither `oven/bun:1.1-slim` nor
+Use `wget --spider`, not `curl` -- neither `node:22-alpine` nor
 `nginx:1.27-alpine` ships curl, and adding it just for healthcheck
-bloats the image.
+bloats the image. The API image does `apk add --no-cache wget tini`.
 
 ## Build args vs runtime env
 
@@ -75,8 +75,10 @@ LABEL org.opencontainers.image.title="<human name>" \
       org.opencontainers.image.description="<one line>"
 ```
 
-## Pinned installs
+## Runtime tree via `pnpm deploy`
 
-The `iii` CLI install in the API Dockerfile uses `VERSION=0.10.0`.
-Bump that field deliberately in its own commit; do not version-bump
-drive-by.
+The API Dockerfile uses `pnpm --filter @carrier-sales/api deploy
+--prod --legacy /prod/api` to produce a self-contained runtime tree,
+and the runner copies `package.json`, `node_modules`, and `dist/`
+from `/prod/api`. `--legacy` is required under pnpm v10 without
+`inject-workspace-packages`; don't drop it.

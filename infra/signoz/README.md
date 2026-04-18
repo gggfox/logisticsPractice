@@ -1,8 +1,9 @@
 # SigNoz observability stack
 
 Self-hosted [SigNoz](https://signoz.io/) community edition for traces, metrics, and logs.
-Deployed alongside the `api` and `dashboard` apps on Dokploy, wired to the Motia
-`iii-observability` worker via OTLP.
+Deployed alongside the `api` and `dashboard` apps on Dokploy. The Fastify API
+ships traces, metrics, and logs over OTLP via the OpenTelemetry Node SDK wired
+up in `apps/api/src/otel.ts`.
 
 ## Services
 

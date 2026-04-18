@@ -6,7 +6,7 @@ description: Author Convex schema tables, queries, mutations, and service calls 
 # Convex patterns for `packages/convex`
 
 Convex is the system-of-record for loads, carriers, calls, negotiations,
-and metric snapshots. Motia steps read/write via `convexService` (see
+and metric snapshots. Fastify routes and BullMQ workers read/write via `convexService` (see
 `apps/api/src/services/convex.service.ts`); the dashboard reads via
 `useQuery`. This skill captures the project-local conventions.
 
@@ -112,7 +112,7 @@ mapping table. Common mismatches:
 | `z.enum(CALL_OUTCOMES)` | `v.string()` | trying to encode the enum in Convex |
 
 Convex does not enforce enum membership -- rely on the Zod layer on the
-inbound side (Motia `bodySchema`) and the enum tuple in the dashboard.
+inbound side (Fastify route `body` Zod schema) and the enum tuple in the dashboard.
 
 ## Query vs mutation vs action
 
@@ -123,10 +123,11 @@ inbound side (Motia `bodySchema`) and the enum tuple in the dashboard.
 | `action` | via `runQuery` | via `runMutation` | yes |
 
 This project has **no actions**. External calls (FMCSA verify, HappyRobot
-classify) live in Motia steps, which call `convexService` for persistence.
-Do not introduce an action without a strong reason -- the rationale is that
-Motia steps already have observability wiring, retries, and config, and
-splitting the external call into a Convex action duplicates that stack.
+classify) live in Fastify routes and BullMQ workers, which call
+`convexService` for persistence. Do not introduce an action without a
+strong reason -- the rationale is that Fastify routes / workers already
+have observability wiring, retries (via BullMQ), and config, and splitting
+the external call into a Convex action duplicates that stack.
 
 ## Cross-table reads without waterfalls
 
@@ -151,8 +152,8 @@ const loads = await Promise.all(
 )
 ```
 
-This same rule applies to Motia cron steps iterating over calls (see
-`apps/api/src/steps/cron/aggregate-metrics.step.ts`'s `computeTopLanes`,
+This same rule applies to cron jobs iterating over calls (see
+`apps/api/src/cron/aggregate-metrics.cron.ts`'s `computeTopLanes`,
 which currently serializes -- replace with `Promise.all` when touched).
 
 Convex enforces a per-transaction read budget; unbounded waterfalls will
@@ -180,8 +181,8 @@ if (!load) throw new Error(\`Load ${args.load_id} not found\`)
 return await ctx.db.query('loads').withIndex(...).first()  // T | null
 ```
 
-Motia step maps the mutation throw to 500 (or reshapes it to 404 explicitly
-if expected). Queries let the caller decide.
+The Fastify route (or worker) maps the mutation throw to 500 (or reshapes
+it to 404 explicitly if expected). Queries let the caller decide.
 
 ## Verification
 

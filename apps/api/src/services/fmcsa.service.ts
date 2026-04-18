@@ -8,6 +8,21 @@ import { convexService } from './convex.service.js'
 
 const FMCSA_BASE_URL = 'https://mobile.fmcsa.dot.gov/qc/services/carriers'
 
+/**
+ * FMCSA returns HTTP 200 with `{ content: null }` for DOT/MC numbers it
+ * doesn't recognize (including non-numeric input and MC-docket-prefixed
+ * strings). Treat that shape as a "not found" signal so callers can
+ * distinguish it from a real schema mismatch.
+ */
+export function isFmcsaNotFound(data: unknown): boolean {
+  return (
+    typeof data === 'object' &&
+    data !== null &&
+    'content' in data &&
+    (data as { content: unknown }).content === null
+  )
+}
+
 async function fetchFromFMCSA(mcNumber: string) {
   const url = `${FMCSA_BASE_URL}/${mcNumber}?webKey=${config.fmcsa.webKey}`
 
@@ -28,6 +43,11 @@ async function fetchFromFMCSA(mcNumber: string) {
       }
 
       const data = await response.json()
+
+      if (isFmcsaNotFound(data)) {
+        return null
+      }
+
       return FMCSACarrierResponseSchema.parse(data)
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error))

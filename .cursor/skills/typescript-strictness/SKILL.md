@@ -138,9 +138,8 @@ Why `satisfies` over `as`:
 
 Use `satisfies` for:
 
-- Motia `StepConfig` exports (required -- see motia-steps skill).
 - Configuration objects where you want literal inference and type
-  checking at the same time.
+  checking at the same time (e.g. `config.ts`, Zod enum tuples).
 - Lookup tables: `const ROLES = { admin: { canEdit: true }, user: {
   canEdit: false } } as const satisfies Record<string, { canEdit:
   boolean }>`.
@@ -169,47 +168,33 @@ Applies especially to:
 - API responses in the dashboard (`MetricsSummary | undefined` is OK
   for "loading"; `{ data?, error? }` is not).
 
-## Motia handler typing
+## Fastify handler typing
 
-`req.pathParams` / `req.queryParams` come in as `Record<string,
-string>` -- untyped. Current code inline-casts:
-
-```ts
-// Everywhere today:
-const { load_id } = req.pathParams as { load_id: string }
-```
-
-This compiles, but it lies: `load_id` could be missing. The rule is
-"parse, don't cast". Recipe for a typed helper in
-`apps/api/src/lib/request-params.ts`:
+Routes declare `params` / `querystring` / `body` Zod schemas in the
+route `schema`, and the `.withTypeProvider<ZodTypeProvider>()` call
+makes `req.params` / `req.query` / `req.body` typed from those
+schemas. The rule is: never reach for `as` to type a request field --
+declare it in the schema instead.
 
 ```ts
-import type { z } from 'zod'
+// BAD -- untyped access, no runtime validation.
+app.get('/api/v1/loads/:load_id', async (req) => {
+  const { load_id } = req.params as { load_id: string }
+  // ...
+})
 
-export function parsePathParams<T extends z.ZodTypeAny>(
-  req: { pathParams: Record<string, string | undefined> },
-  schema: T,
-): z.infer<T> {
-  const result = schema.safeParse(req.pathParams)
-  if (!result.success) {
-    throw new Error(`Invalid path params: ${result.error.message}`)
-  }
-  return result.data
-}
+// GOOD -- typed + validated.
+app.withTypeProvider<ZodTypeProvider>().get(
+  '/api/v1/loads/:load_id',
+  { schema: { params: z.object({ load_id: z.string().min(1) }) } },
+  async (req) => {
+    const { load_id } = req.params  // typed string
+  },
+)
 ```
 
-Then at the call site:
-
-```ts
-const { load_id } = parsePathParams(req, z.object({
-  load_id: z.string().min(1),
-}))
-```
-
-Same for `parseQueryParams`. The throw is caught by the step's
-outer `catch`, which returns a 500 with `failure_stage:
-'parse_params'`. For a friendlier 400, wrap the call in
-`try/catch` inside the handler and return the error body.
+Invalid input 400s automatically with a Zod error message before the
+handler runs.
 
 ## Branded IDs
 

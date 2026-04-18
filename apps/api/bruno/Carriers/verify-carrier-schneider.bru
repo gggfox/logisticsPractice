@@ -1,0 +1,20 @@
+meta {
+  name: Verify carrier - Schneider
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/api/v1/carriers/{{dotSchneider}}
+  body: none
+  auth: none
+}
+
+headers {
+  x-api-key: {{apiKey}}
+  Accept: application/json
+}
+
+docs {
+  Hit our API with a real carrier (Schneider, DOT 264184).
+}

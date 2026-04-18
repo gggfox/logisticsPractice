@@ -1,12 +1,12 @@
 ---
 name: zod-contracts
-description: Author and evolve Zod schemas in packages/shared that are the shared contract between apps/api (Motia), packages/convex, and apps/dashboard. Use when adding or changing schemas in packages/shared/src/schemas, adding a DB field, wiring a new API response, or debugging zod-v3/v4 typecheck errors against Motia's StepSchemaInput.
+description: Author and evolve Zod schemas in packages/shared that are the shared contract between apps/api (Fastify), packages/convex, and apps/dashboard. Use when adding or changing schemas in packages/shared/src/schemas, adding a DB field, wiring a new API response, or debugging zod-v3/v4 typecheck errors at the fastify-type-provider-zod boundary.
 ---
 
 # Zod contracts for `@carrier-sales/shared`
 
-This package holds the Zod schemas + inferred types that the Motia API, the
-Convex database, and the Dashboard all consume. The whole point is: one
+This package holds the Zod schemas + inferred types that the Fastify API,
+the Convex database, and the Dashboard all consume. The whole point is: one
 schema, three consumers. Drifts here show up as silent undefined fields in
 the dashboard or runtime errors on Convex insert -- but rarely as a clean
 type error.
@@ -16,9 +16,9 @@ Quick reference: `.cursor/rules/zod-contracts.mdc`.
 ## Mental model
 
 ```
-               +-- apps/api (Motia)        -> bodySchema, responseSchema
-@carrier-sales/shared ----+-- packages/convex          -> mirror as v.string()/v.number()
-               +-- apps/dashboard         -> useQuery/render with z.infer<>
+               +-- apps/api (Fastify)       -> route `schema.body` / `schema.response`
+@carrier-sales/shared ----+-- packages/convex           -> mirror as v.string()/v.number()
+               +-- apps/dashboard          -> useQuery/render with z.infer<>
 ```
 
 A field lives in four places:
@@ -26,7 +26,7 @@ A field lives in four places:
 1. `*.schema.ts` (source of truth)
 2. `schemas/index.ts` (explicit re-export)
 3. `packages/convex/convex/schema.ts` (`v.*` validator on the same field)
-4. Consumers (Motia step, dashboard component) via `z.infer<>`
+4. Consumers (Fastify route, BullMQ worker, dashboard component) via `z.infer<>`
 
 ## File template
 
@@ -101,8 +101,8 @@ maps to the internal one. Never try to parse a raw FMCSA response with
 
 ## Request vs response schemas
 
-Requests (validated by `bodySchema` in a Motia step) are usually narrower
-than the stored entity:
+Requests (validated by `schema.body` on a Fastify route) are usually
+narrower than the stored entity:
 
 ```ts
 export const OfferRequestSchema = z.object({
@@ -121,8 +121,10 @@ export const OfferResponseSchema = z.object({
 })
 ```
 
-Use the request schema's `z.infer<>` type in the step handler; use the
-response schema with `asStepSchema(...)` in the `responseSchema` map.
+Use the request schema's `z.infer<>` type in the route handler. With
+`.withTypeProvider<ZodTypeProvider>()` + `schema: { body: ... }`,
+`req.body` is already typed from the schema -- you don't need a
+manual `z.infer<>`.
 
 ## Adding a field -- three-step checklist
 
@@ -133,7 +135,7 @@ Adding `foo` to Load:
 - [ ] Added `foo: z.string().min(1)` to LoadSchema in load.schema.ts
 - [ ] Added `foo: v.string()` to loads table in packages/convex/convex/schema.ts
 - [ ] `convex codegen` / dashboard typecheck clean
-- [ ] Any Motia step returning Load re-typechecks (it uses LoadSchema directly)
+- [ ] Any Fastify route returning Load re-typechecks (it uses LoadSchema directly)
 ```
 
 If the field is optional: use `z.string().min(1).optional()` + `v.optional(v.string())`.
@@ -143,9 +145,10 @@ then reference via `z.enum(NEW_CONST)`.
 
 ## The Zod v3 <-> v4 bridge
 
-Motia ships its own Zod v4; `@carrier-sales/shared` is on Zod v3. Runtime is
-identical (`.safeParse` is compatible), but the type systems don't unify.
-The whole repo has **one** named cast site:
+`@carrier-sales/shared` is on Zod v3. Some transitive deps (and some
+versions of `fastify-type-provider-zod`) ship Zod v4 types. Runtime is
+identical (`.safeParse` is compatible), but the type systems don't
+unify. The whole repo has **one** named cast site:
 
 ```ts
 // apps/api/src/lib/zod-schema.ts
@@ -153,15 +156,16 @@ export const asStepSchema = (schema: ZodTypeAny): StepSchemaInput =>
   schema as unknown as StepSchemaInput
 ```
 
-When writing a Motia step, call `asStepSchema(LoadSchema)` in
-`responseSchema`. Do **not**:
+Use `asStepSchema(LoadSchema)` only at that boundary if a response
+schema refuses to typecheck. Do **not**:
 
 - Paste the cast inline (`SomeSchema as unknown as StepSchemaInput`).
 - Introduce a second helper with a different name.
-- Import zod from Motia's node_modules to "work around" the mismatch.
+- Import zod from a transitive dep's node_modules to "work around"
+  the mismatch.
 
-If you see `Type 'ZodObject<...>' is not assignable to type
-'StepSchemaInput'`, the fix is `asStepSchema(...)`, not a cast.
+If you see a `ZodObject<...>` assignability error at a route's
+`response` map, the fix is `asStepSchema(...)`, not a broader cast.
 
 ## Consuming the types
 

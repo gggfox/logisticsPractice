@@ -20,8 +20,8 @@ lives comfortably under those; don't fight them with casts. Deep-dive:
 
 ## Typing shape
 
-- `as const satisfies T` for configs and lookup tables (see every
-  `StepConfig`, `config.ts`). Prefer `satisfies` over `as`.
+- `as const satisfies T` for configs and lookup tables (see
+  `config.ts`, `QUEUE_NAMES`). Prefer `satisfies` over `as`.
 - Discriminated unions over nullable pairs:
 
 ```ts
@@ -38,20 +38,29 @@ type Result = { data?: Foo; error?: string }
   the same as `{ foo: string | undefined }`. Don't assign `undefined`
   to satisfy the former.
 
-## Motia handler typing
+## Fastify handler typing
 
-`req.pathParams` / `req.queryParams` are untyped. Wrap with a Zod
-helper instead of casting inline:
+Use `.withTypeProvider<ZodTypeProvider>()` and declare `params` /
+`querystring` / `body` in the route `schema` so the request is typed
+and validated:
 
 ```ts
 // BAD
-const { load_id } = req.pathParams as { load_id: string }
+app.get('/api/v1/loads/:load_id', async (req) => {
+  const { load_id } = req.params as { load_id: string }
+})
 
-// GOOD (once the helper exists in apps/api/src/lib/):
-const { load_id } = parsePathParams(req, z.object({ load_id: z.string().min(1) }))
+// GOOD
+app.withTypeProvider<ZodTypeProvider>().get(
+  '/api/v1/loads/:load_id',
+  { schema: { params: z.object({ load_id: z.string().min(1) }) } },
+  async (req) => {
+    const { load_id } = req.params  // typed
+  },
+)
 ```
 
-See the skill for the helper recipe.
+See the skill for details.
 
 ## Branded IDs (gradual adoption)
 

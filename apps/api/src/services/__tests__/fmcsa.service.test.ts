@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { isFmcsaNotFound } from '../fmcsa.service.js'
 
 /** Mirrors eligibility rules in `fmcsa.service.ts` (not exported from the module). */
 function evaluateEligibility(carrier: {
@@ -57,5 +58,37 @@ describe('evaluateEligibility', () => {
     })
     expect(result.eligible).toBe(false)
     expect(result.reason).toContain('active OOS order')
+  })
+})
+
+describe('isFmcsaNotFound', () => {
+  it('returns true for the actual FMCSA not-found shape', () => {
+    expect(isFmcsaNotFound({ content: null, retrievalDate: '2026-04-18T20:36:25.368+0000' })).toBe(
+      true,
+    )
+  })
+
+  it('returns true for a bare { content: null } object', () => {
+    expect(isFmcsaNotFound({ content: null })).toBe(true)
+  })
+
+  it('returns false for a populated content object', () => {
+    expect(
+      isFmcsaNotFound({
+        content: { carrier: { legalName: 'Schneider National Carriers Inc' } },
+      }),
+    ).toBe(false)
+  })
+
+  it('returns false for an empty object without a content field', () => {
+    expect(isFmcsaNotFound({})).toBe(false)
+  })
+
+  it('returns false for null, undefined, and primitive values', () => {
+    expect(isFmcsaNotFound(null)).toBe(false)
+    expect(isFmcsaNotFound(undefined)).toBe(false)
+    expect(isFmcsaNotFound('content: null')).toBe(false)
+    expect(isFmcsaNotFound(0)).toBe(false)
+    expect(isFmcsaNotFound(false)).toBe(false)
   })
 })

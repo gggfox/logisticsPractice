@@ -98,8 +98,8 @@ Convex time helper. Sort by timestamp via a dedicated `by_<field>_at` index.
 ## Not-found behavior
 
 Mutations `throw new Error(\`Load ${id} not found\`)` for impossible state.
-The Motia step catches and returns the 4xx body. Don't return `null` from a
-mutation for a missing id.
+The Fastify route (or worker) catches and maps it to the 4xx body. Don't
+return `null` from a mutation for a missing id.
 
 Queries return `null` from `.first()` for missing; the caller decides 404.
 
@@ -108,9 +108,9 @@ Queries return `null` from `.first()` for missing; the caller decides 404.
 - `query` / `mutation` = DB-only, no external fetch (no `fetch()`, no SDK
   calls).
 - `action` = the escape hatch for external calls. **This project doesn't use
-  Convex actions** -- external calls (FMCSA, HappyRobot) live in Motia
-  steps calling `convexService`. Do not introduce actions without a
-  reason.
+  Convex actions** -- external calls (FMCSA, HappyRobot) live in Fastify
+  routes and BullMQ workers calling `convexService`. Do not introduce
+  actions without a reason.
 
 ## Cross-table work
 
@@ -120,5 +120,5 @@ Loops with awaits = waterfall. For N lookups, `Promise.all`:
 const loads = await Promise.all(calls.map((c) => ctx.db.query('loads').withIndex(...).first()))
 ```
 
-This rule also applies in Motia cron steps (see
-[apps/api/src/steps/cron/aggregate-metrics.step.ts](mdc:apps/api/src/steps/cron/aggregate-metrics.step.ts)).
+This rule also applies in cron jobs (see
+[apps/api/src/cron/aggregate-metrics.cron.ts](mdc:apps/api/src/cron/aggregate-metrics.cron.ts)).

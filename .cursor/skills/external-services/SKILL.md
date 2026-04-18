@@ -1,6 +1,6 @@
 ---
 name: external-services
-description: Author external HTTP service clients for apps/api/src/services (FMCSA, HappyRobot, etc.) with timeouts, safe retries, Zod parsing, and secret-safe error handling. Use when adding or modifying a service that calls a third-party API, when wiring an external call into a Motia step, or when a service leaks secrets / retries unsafely / has unbounded fetches.
+description: Author external HTTP service clients for apps/api/src/services (FMCSA, HappyRobot, etc.) with timeouts, safe retries, Zod parsing, and secret-safe error handling. Use when adding or modifying a service that calls a third-party API, when wiring an external call into a Fastify route or BullMQ worker, or when a service leaks secrets / retries unsafely / has unbounded fetches.
 ---
 
 # External service clients
@@ -58,8 +58,8 @@ export async function getThing(id: string) {
 | HappyRobot | `15_000` ms | Transcripts can be large; still must bound. |
 
 Every `fetch` **must** pass `signal: AbortSignal.timeout(ms)`. An
-unbounded fetch will hold a Motia worker indefinitely when the vendor
-goes dark.
+unbounded fetch will hold a Fastify request or BullMQ worker
+indefinitely when the vendor goes dark.
 
 ## Retry policy
 
@@ -98,8 +98,8 @@ Rules:
   outage -- fail fast and let the wide event catch it.
 - Never retry `POST` / `PUT` / `DELETE` unless the endpoint is
   documented idempotent.
-- Do not catch-and-swallow. The final throw is required so the Motia
-  step can turn it into a 5xx with `failure_stage`.
+- Do not catch-and-swallow. The final throw is required so the
+  calling route / worker can turn it into a 5xx with `failure_stage`.
 
 ## 404 vs error
 
@@ -137,8 +137,9 @@ throw new Error(`Failed to GET ${url}`)
 throw new Error(`HappyRobot error: ${await response.text()}`)
 ```
 
-Same rule applies to `ctx.logger.error` in the calling step: log
-`{ mc_number, status }`, never `{ url, headers }`.
+Same rule applies to `req.log.error` in the calling route (or
+`logger.error` in a worker): log `{ mc_number, status }`, never
+`{ url, headers }`.
 
 ## Config, not env
 
@@ -156,10 +157,10 @@ Two-tier pattern, Convex is authoritative:
 2. If cached and `Date.now() - verified_at < TTL`, return cached.
 3. Otherwise fetch the vendor, parse, upsert to Convex, return.
 
-Do **not** add an in-memory `Map` to the module. Motia spawns workers;
-a per-worker cache is both inconsistent across workers and lost on
-restart. If a hot cache is genuinely needed, put it in Redis (already
-in the stack) with an explicit TTL.
+Do **not** add an in-memory `Map` to the module. The API container
+may scale horizontally, and a per-process cache is both inconsistent
+across instances and lost on restart. If a hot cache is genuinely
+needed, put it in Redis (already in the stack) with an explicit TTL.
 
 ## Pure logic goes in the module, not the test
 
@@ -183,25 +184,26 @@ import { evaluateEligibility } from '../fmcsa.service.js'
 Pure functions never touch `fetch`, Convex, or `Date.now()` directly
 unless time is injected.
 
-## Handoff to the Motia step
+## Handoff to the Fastify route
 
-Steps call services and classify errors:
+Routes call services and classify errors:
 
 ```ts
 try {
   const result = await verifyCarrier(mc_number)
-  enrichWideEvent(ctx, { eligible: result.is_eligible, status: result.operating_status })
-  return { status: 200, body: result }
-} catch (error) {
-  enrichWideEvent(ctx, { failure_stage: 'fmcsa_verify' })
-  ctx.logger.error('Carrier verification failed', {
-    mc_number,
-    error: error instanceof Error ? error.message : String(error),
+  enrichWideEvent(req, { eligible: result.is_eligible, status: result.operating_status })
+  return result
+} catch (err) {
+  enrichWideEvent(req, { failure_stage: 'fmcsa_verify' })
+  req.log.error(
+    { mc_number, err: err instanceof Error ? err.message : String(err) },
+    'Carrier verification failed',
+  )
+  return reply.code(502).send({
+    error: 'Bad Gateway',
+    message: 'Carrier verification unavailable',
+    statusCode: 502,
   })
-  return {
-    status: 502,
-    body: { error: 'Bad Gateway', message: 'Carrier verification unavailable', statusCode: 502 },
-  }
 }
 ```
 

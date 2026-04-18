@@ -1,78 +1,86 @@
 ---
-description: Wide-event logging conventions for Motia step handlers
-globs: apps/api/src/steps/**/*.ts
+description: Wide-event logging conventions for Fastify routes, BullMQ workers, and cron jobs
+globs: apps/api/src/routes/**/*.ts,apps/api/src/workers/**/*.ts,apps/api/src/cron/**/*.ts
 alwaysApply: false
 ---
 
 # Wide-event logging
 
-One structured event per handler invocation, emitted at the tail, correlated
-to OTel traces via `trace_id`. Full contract in
+One structured event per handler invocation, emitted at the tail,
+correlated to OTel traces via `trace_id`. Full contract in
 [docs/observability.md](mdc:docs/observability.md).
 
 ## Required pattern
 
-HTTP step -- register `wideEventMiddleware` and enrich via `enrichWideEvent`:
+HTTP route -- the global `wideEvent` plugin (registered in `server.ts`)
+seeds and emits the event. Enrich via `enrichWideEvent(req, ...)`:
 
 ```ts
-import { api, type Handlers, type StepConfig } from 'motia'
-import { wideEventMiddleware } from '../../middleware/wide-event.middleware.js'
+import type { FastifyPluginAsync } from 'fastify'
+import type { ZodTypeProvider } from 'fastify-type-provider-zod'
 import { enrichWideEvent } from '../../observability/wide-event-store.js'
 
-export const config = {
-  name: 'MyStep',
-  triggers: [api('POST', '/api/v1/things', {
-    middleware: [rateLimiter, apiKeyAuth, wideEventMiddleware],
-  })],
-  flows: ['my-flow'],
-} as const satisfies StepConfig
-
-export const handler: Handlers<typeof config> = async (req, ctx) => {
-  enrichWideEvent(ctx, { thing_id: req.body.id })
-  // ... business logic ...
-  enrichWideEvent(ctx, { outcome_field: computed })
-  return { status: 200, body: result }
+const route: FastifyPluginAsync = async (app) => {
+  app.withTypeProvider<ZodTypeProvider>().post(
+    '/api/v1/things',
+    { schema: { body: ThingSchema } },
+    async (req, reply) => {
+      enrichWideEvent(req, { thing_id: req.body.id })
+      // ... business logic ...
+      enrichWideEvent(req, { outcome_field: computed })
+      return result
+    },
+  )
 }
 ```
 
-Queue / cron step -- wrap with `withWideEvent`:
+Queue worker / cron job -- wrap with `withWideEvent`:
 
 ```ts
-import { withWideEvent } from '../../observability/wide-event.js'
+import { withWideEvent } from '../observability/wide-event.js'
 
-export const handler: Handlers<typeof config> = async (input, ctx) =>
-  withWideEvent('MyStep', ctx, async (enrich) => {
+await withWideEvent(
+  'MyJob',
+  { logger, seed: { trigger_type: 'queue', trigger_topic: QUEUE_NAMES.x } },
+  async (enrich) => {
     enrich({ thing_id: input.id })
     const result = await work()
     enrich({ items: result.count })
-  })
+  },
+)
 ```
 
 ## Rules
 
-- **One wide event per invocation.** The middleware / wrapper emits it; never
-  call `logger.info(...)` with a second canonical log line for the same request.
+- **One wide event per invocation.** The plugin / wrapper emits it;
+  never call `req.log.info(...)` with a second canonical log line for
+  the same request.
 - **High-cardinality business fields go on the wide event** (`call_id`,
-  `mc_number`, `load_id`, `offered_rate`, ...). Never bake them into the log
-  message string.
-- **OTel metric attributes must be LOW cardinality** (`outcome`, `sentiment`,
-  `round: String(n)`). If you want `call_id` in your query, use the wide event.
-- **Keep `logger.warn` / `logger.error` only for standalone signals** that
-  need real-time alerting independent of the request outcome (e.g. "invalid
-  webhook signature", "fmcsa rate-limited"). The wide event still fires.
-- **Never log secrets.** Hash api keys (`api_key_hash` in middleware already
-  does this), never emit raw `x-api-key`, `Authorization`, or `WEBHOOK_SECRET`.
-- **No `console.log`.** Use `ctx.logger` so the OTel logs exporter captures it.
-- **No string-concatenated messages for data** -- put the value in a field,
-  not `` `processed ${n} items` ``.
+  `mc_number`, `load_id`, `offered_rate`, ...). Never bake them into
+  the log message string.
+- **OTel metric attributes must be LOW cardinality** (`outcome`,
+  `sentiment`, `round: String(n)`). If you want `call_id` in your
+  query, use the wide event.
+- **Keep `logger.warn` / `logger.error` only for standalone signals**
+  that need real-time alerting independent of the request outcome
+  (e.g. "invalid webhook signature", "fmcsa rate-limited"). The wide
+  event still fires.
+- **Never log secrets.** Hash api keys (`api_key_hash` in the
+  wide-event plugin already does this), never emit raw `x-api-key`,
+  `Authorization`, or `WEBHOOK_SECRET`.
+- **No `console.log`.** Use `req.log` (routes) or the app-wide
+  `logger` (workers / cron) so the OTel pino instrumentation captures
+  it.
+- **No string-concatenated messages for data** -- put the value in a
+  field, not `` `processed ${n} items` ``.
 
 ## Don't
 
 ```ts
 // BAD: bracket logging with the old pattern.
-logger.info('Processing offer', { call_id })
+req.log.info({ call_id }, 'Processing offer')
 // ... work ...
-logger.info('Offer processed', { call_id, accepted })
+req.log.info({ call_id, accepted }, 'Offer processed')
 ```
 
 ```ts
@@ -84,6 +92,6 @@ bookingOutcomeCounter.add(1, { call_id, load_id })
 
 ```ts
 // GOOD: one wide event at the tail, metrics stay aggregate.
-enrichWideEvent(ctx, { call_id, load_id, accepted, round })
+enrichWideEvent(req, { call_id, load_id, accepted, round })
 bookingOutcomeCounter.add(1, { result: accepted ? 'accepted' : 'countered' })
 ```

@@ -38,12 +38,12 @@ function from the service module -- don't force tests to duplicate it.
 
 Cache at the DB layer with a TTL (e.g. `CARRIER_CACHE_TTL_MS`) via a
 lookup-first pattern. Do **not** add a process-local `Map` for
-cross-request caching -- Motia workers restart and lose it; correctness
-depends on Convex being authoritative.
+cross-request caching -- Fastify and BullMQ worker processes restart
+and lose it; correctness depends on Convex being authoritative.
 
 ## Error shape for callers
 
-Services throw plain `Error`. The calling Motia step is responsible for
-mapping failures into the wide-event `error` shape (`{type, message,
-code?, retriable?}`) and setting `failure_stage`. See
-`.cursor/rules/wide-event-logging.mdc`.
+Services throw plain `Error`. The calling Fastify route or BullMQ
+worker is responsible for mapping failures into the wide-event `error`
+shape (`{type, message, code?, retriable?}`) and setting
+`failure_stage`. See `.cursor/rules/wide-event-logging.mdc`.

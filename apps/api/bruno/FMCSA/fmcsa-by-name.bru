@@ -1,0 +1,25 @@
+meta {
+  name: FMCSA by name
+  type: http
+  seq: 3
+}
+
+get {
+  url: https://mobile.fmcsa.dot.gov/qc/services/carriers/name/SCHNEIDER?webKey={{fmcsaWebKey}}
+  body: none
+  auth: none
+}
+
+params:query {
+  webKey: {{fmcsaWebKey}}
+}
+
+headers {
+  Accept: application/json
+}
+
+docs {
+  Fuzzy search by legal/DBA name -- returns a list of candidates.
+  Try swapping SCHNEIDER for SWIFT, KNIGHT TRANSPORTATION, J.B. HUNT, etc.
+  Bruno URL-encodes spaces automatically.
+}

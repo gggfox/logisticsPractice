@@ -1,0 +1,23 @@
+meta {
+  name: Get first load from search
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{baseUrl}}/api/v1/loads/{{firstLoadId}}
+  body: none
+  auth: none
+}
+
+headers {
+  x-api-key: {{apiKey}}
+  Accept: application/json
+}
+
+docs {
+  Chained example: fetch the first load_id returned by `Search loads (all)`.
+  You MUST run `Search loads (all)` first in the same session so its
+  post-response script populates the `firstLoadId` collection var.
+  Otherwise `{{firstLoadId}}` is sent literally and the server returns 404.
+}

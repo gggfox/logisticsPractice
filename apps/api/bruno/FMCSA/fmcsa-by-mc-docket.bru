@@ -1,0 +1,24 @@
+meta {
+  name: FMCSA by MC docket
+  type: http
+  seq: 2
+}
+
+get {
+  url: https://mobile.fmcsa.dot.gov/qc/services/carriers/docket-number/{{mcSchneider}}?webKey={{fmcsaWebKey}}
+  body: none
+  auth: none
+}
+
+params:query {
+  webKey: {{fmcsaWebKey}}
+}
+
+headers {
+  Accept: application/json
+}
+
+docs {
+  Direct lookup by MC docket number (different FMCSA endpoint). Use this
+  when you only have an MC# from a carrier over the phone and no DOT#.
+}

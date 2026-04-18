@@ -1,8 +1,7 @@
 /**
  * In-memory token-bucket rate limiter keyed by `x-api-key` (fallback:
- * `'anonymous'`). Same budget as the old Motia middleware and still
- * registered before auth so unauth'd traffic consumes budget and can't
- * brute-force keys for free.
+ * `'anonymous'`). Registered before auth so unauth'd traffic consumes
+ * budget and can't brute-force keys for free.
  *
  * Keyed by api key rather than IP because Traefik sets
  * `x-forwarded-for` from client-controlled headers.

@@ -24,7 +24,7 @@ Terminology follows the current HappyRobot docs (<https://docs.happyrobot.ai>):
 ## 1. Prerequisites
 
 1. An organization on <https://platform.happyrobot.ai>.
-2. API deployed (the Motia app in `apps/api`) with these environment variables set
+2. API deployed (the Fastify app in `apps/api`) with these environment variables set
    ( see [`.env.example`](../.env.example) ):
     - `BRIDGE_API_KEY` — shared secret for tool calls and the call-completed
       webhook (sent as `x-api-key`)

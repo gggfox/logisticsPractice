@@ -1,0 +1,20 @@
+meta {
+  name: Verify carrier - Swift
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/api/v1/carriers/{{dotSwift}}
+  body: none
+  auth: none
+}
+
+headers {
+  x-api-key: {{apiKey}}
+  Accept: application/json
+}
+
+docs {
+  Hit our API with a real carrier (Swift Transportation, DOT 54283).
+}

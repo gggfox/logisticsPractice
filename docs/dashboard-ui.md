@@ -17,7 +17,7 @@ kit guarantee, and how to extend it.
 Carrier (phone)
       │
       ▼
-HappyRobot Voice AI ────▶ Bridge API (Motia, Fastify)
+HappyRobot Voice AI ────▶ Bridge API (Fastify)
                                 │        │
                                 │        ├─▶ FMCSA QCMobile
                                 │        └─▶ Redis / BullMQ
@@ -31,18 +31,18 @@ HappyRobot Voice AI ────▶ Bridge API (Motia, Fastify)
 ```
 
 The dashboard is a **pure read path**. It never writes to Convex and never
-calls the Motia API directly:
+calls the Fastify API directly:
 
 - All list/detail reads go through **Convex queries** (`api.calls.getAll`,
   `api.loads.getAll`, `api.metrics.getSummary`, …). The client pushes updates
   over WebSocket whenever a mutation on the server touches the underlying
   tables.
 - Writes (new calls, negotiation rounds, booking state, metric rollups) are
-  performed by **Motia steps** in `apps/api` calling Convex mutations from
-  `packages/convex`. The dashboard just renders whatever the subscription
-  emits.
+  performed by **Fastify routes / workers** in `apps/api` calling Convex
+  mutations from `packages/convex`. The dashboard just renders whatever the
+  subscription emits.
 - There is no shared session or cookie between the dashboard and the API —
-  auth on the Motia side is API‑key / HMAC only, and those keys live
+  auth on the API side is API‑key / HMAC only, and those keys live
   server‑side.
 
 This separation is deliberate: the dashboard can be pointed at any Convex
@@ -129,7 +129,7 @@ Queries wired up today:
 | Carriers            | `carriers.getAll`, `calls.getAll`                |
 | Negotiations        | `negotiations.getAll`, `calls.getAll`            |
 
-When a Motia step runs `ctx.runMutation(api.calls.insert, …)` on the server,
+When a Fastify route / worker runs `convexService.*` on the server,
 Convex pushes the new row to every subscribed client. There is no imperative
 refresh path in the UI.
 

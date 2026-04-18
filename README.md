@@ -9,12 +9,12 @@ Carriers call in to request loads. The AI agent verifies their MC number via FMC
 ## Architecture
 
 ```
-Carrier --> Voice AI --> Bridge API (Motia) --> Convex DB --> React Dashboard
+Carrier --> Voice AI --> Bridge API (Fastify) --> Convex DB --> React Dashboard
                                         |
                                     FMCSA API
 ```
 
-- **Bridge API**: Motia-powered REST endpoints that the Voice AI calls during live conversations
+- **Bridge API**: Fastify-powered REST endpoints that the Voice AI calls during live conversations
 - **Dashboard**: React + Tremor + Recharts with real-time Convex subscriptions
 - **Infrastructure**: Docker + Dokploy (Hostinger VPS) + GitHub Actions CI
 
@@ -45,7 +45,7 @@ docker compose up
 
 ```
 apps/
-  api/              Motia backend (Bridge API + webhooks + event processing)
+  api/              Fastify backend (Bridge API + webhooks + event processing)
   dashboard/        React analytics dashboard
 packages/
   shared/           Zod schemas, TypeScript types, constants

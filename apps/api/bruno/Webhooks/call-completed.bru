@@ -1,0 +1,42 @@
+meta {
+  name: Call completed webhook
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/api/v1/webhooks/call-completed
+  body: json
+  auth: none
+}
+
+headers {
+  x-api-key: {{apiKey}}
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "call_id": "{{callId}}",
+    "phone_number": "+15551234567",
+    "carrier_mc": "{{mcNumber}}",
+    "load_id": "{{loadId}}",
+    "transcript": "Carrier accepted at $2100 after one counter.",
+    "duration_seconds": 180,
+    "started_at": "2026-04-16T10:00:00.000Z",
+    "ended_at": "2026-04-16T10:03:00.000Z",
+    "status": "completed",
+    "extracted_data": {
+      "final_rate": 2100,
+      "agreed": true
+    }
+  }
+}
+
+docs {
+  Inbound webhook from HappyRobot when a call ends.
+  Auth is `x-api-key` alone. `x-webhook-signature` is optional telemetry;
+  it never gates the 200 response -- if sent, the server records
+  signature_state=valid|invalid on the wide event and the
+  carrier_sales.webhook.received counter.
+}

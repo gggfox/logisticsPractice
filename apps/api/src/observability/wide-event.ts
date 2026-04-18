@@ -2,9 +2,9 @@
  * Wide-event logging primitives. One structured event per handler invocation,
  * enriched with business context, correlated to OTel traces via `trace_id`.
  *
- * Replaces the earlier Motia `ctx.logger`-threaded version. HTTP routes let
- * the wide-event Fastify plugin seed and emit the event; BullMQ workers and
- * cron handlers call `withWideEvent(stepName, { logger }, fn)` directly.
+ * HTTP routes let the wide-event Fastify plugin seed and emit the event;
+ * BullMQ workers and cron handlers call
+ * `withWideEvent(stepName, { logger }, fn)` directly.
  *
  * See docs/observability.md for the contract and field conventions.
  */

@@ -1,12 +1,12 @@
 # Security notes
 
 Living document of security-relevant choices in this repo. Pairs with
-`.cursor/skills/api-security/SKILL.md` (Motia API) and
+`.cursor/skills/api-security/SKILL.md` (Fastify API) and
 `.cursor/rules/api-security.mdc` (the short rule).
 
 ## Boundaries
 
-- **Motia API** (`apps/api`) is the production security boundary. Every
+- **Fastify API** (`apps/api`) is the production security boundary. Every
   public endpoint — including the call-completed webhook — is rate-limited
   and API-key authenticated via `x-api-key`. The webhook additionally
   accepts an optional `x-webhook-signature` HMAC header that is recorded
@@ -65,23 +65,25 @@ deployment URL is not public-indexed and the dataset is synthetic.
 3. Convert all mutations (`loads.upsert`, `loads.updateStatus`,
    `calls.create`, `calls.updateOutcome`, `carriers.upsert`,
    `negotiations.logRound`, `metrics.write`) to `internalMutation` and
-   call them from Motia only, via an admin-scoped `CONVEX_DEPLOY_KEY`.
+   call them from the Fastify API only, via an admin-scoped `CONVEX_DEPLOY_KEY`.
 4. Add a login flow to `apps/dashboard` and switch `ConvexReactClient`
    to `ConvexProviderWithAuth`.
 
-## Middleware stack (as-is)
+## Plugin stack (as-is)
 
-Every HTTP step in `apps/api/src/steps/**` mounts:
+Every HTTP route in `apps/api/src/routes/**` inherits the plugin chain
+registered in `apps/api/src/server.ts`:
 
 ```ts
-middleware: [securityHeaders, rateLimiter, apiKeyAuth, wideEventMiddleware]
+securityHeaders -> rateLimiter -> apiKeyAuth -> wideEvent
 ```
 
-Webhook steps skip `rateLimiter` so a legitimate batch burst from
-HappyRobot cannot 429; `x-api-key` is still enforced via the global
-`apiKeyAuth` plugin. The public health endpoint (`/api/v1/health`) skips
-`apiKeyAuth` via path bypass; the bypass is path-based only, never
-header-based.
+`apiKeyAuth` is a `preHandler` hook that carves out `/api/v1/health`
+(container healthchecks / Traefik liveness) and accepts a
+`?api_key=...` query fallback scoped to `/docs/**` for the Swagger UI.
+Webhook routes keep `rateLimiter` but rely on `x-api-key` for auth and
+a telemetry-only `x-webhook-signature` HMAC (see below). The bypass
+for `/api/v1/health` is path-based only, never header-based.
 
 `securityHeaders` sets `X-Content-Type-Options`, `X-Frame-Options`,
 `Referrer-Policy`, and `Strict-Transport-Security` on every response,
@@ -103,7 +105,7 @@ only.
   becomes a real need (Redis is already in the stack).
 - **`x-debug` header**: gated by `DEBUG_HEADER_ENABLED` (default
   `false`). Enable only in dev. See
-  `apps/api/src/middleware/wide-event.middleware.ts`.
+  `apps/api/src/plugins/wide-event.ts`.
 - **SigNoz JWT secret**: `SIGNOZ_JWT_SECRET` is required at compose-up;
   the stack refuses to boot without it. Generate via
   `openssl rand -base64 32` and set in Dokploy's Env tab.

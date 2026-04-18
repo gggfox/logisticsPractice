@@ -2,7 +2,7 @@
   "$schema": "https://unpkg.com/knip@5/schema.json",
   "workspaces": {
     "apps/api": {
-      "entry": ["src/steps/**/*.step.ts", "src/**/*.{test,spec}.ts"],
+      "entry": ["src/server.ts", "src/**/*.{test,spec}.ts"],
       "project": ["src/**/*.ts"]
     },
     "apps/dashboard": {
@@ -23,6 +23,5 @@
       "project": ["convex/**/*.ts"],
       "ignore": ["convex/_generated/**"]
     }
-  },
-  "ignoreDependencies": ["motia"]
+  }
 }

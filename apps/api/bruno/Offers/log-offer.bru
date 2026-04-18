@@ -1,0 +1,29 @@
+meta {
+  name: Log offer
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/api/v1/offers
+  body: json
+  auth: none
+}
+
+headers {
+  x-api-key: {{apiKey}}
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "call_id": "{{callId}}",
+    "load_id": "{{loadId}}",
+    "carrier_mc": "{{mcNumber}}",
+    "offered_rate": 2100
+  }
+}
+
+docs {
+  Post a carrier's offer. Server evaluates acceptance or returns a counter.
+}

@@ -25,6 +25,7 @@ const getTranscriptRoute: FastifyPluginAsync = async (app) => {
         params: ParamsSchema,
         response: {
           200: TranscriptResponseSchema,
+          404: ErrorBodySchema,
           500: ErrorBodySchema,
         },
       },
@@ -35,7 +36,18 @@ const getTranscriptRoute: FastifyPluginAsync = async (app) => {
 
       try {
         const transcript = await getCallTranscript(call_id)
-        enrichWideEvent(req, { transcript_length: transcript.transcript.length })
+        if (transcript === null) {
+          enrichWideEvent(req, { transcript_found: false })
+          return reply.code(404).send({
+            error: 'Not Found',
+            message: `Transcript for call ${call_id} not found`,
+            statusCode: 404,
+          })
+        }
+        enrichWideEvent(req, {
+          transcript_found: true,
+          transcript_length: transcript.transcript.length,
+        })
         return transcript
       } catch (err) {
         enrichWideEvent(req, { failure_stage: 'happyrobot_api' })

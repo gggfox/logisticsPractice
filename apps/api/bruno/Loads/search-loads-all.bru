@@ -1,0 +1,28 @@
+meta {
+  name: Search loads (all)
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/api/v1/loads
+  body: none
+  auth: none
+}
+
+headers {
+  x-api-key: {{apiKey}}
+  Accept: application/json
+}
+
+script:post-response {
+  const firstLoadId = res.body?.loads?.[0]?.load_id;
+  if (firstLoadId) bru.setVar("firstLoadId", firstLoadId);
+}
+
+docs {
+  Search with no filters (lists everything available).
+  The post-response script stashes the first load_id into the
+  `firstLoadId` collection var so `Get first load from search`
+  can consume it.
+}

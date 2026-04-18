@@ -1,33 +1,28 @@
 ---
 description: API key auth, rate limiting, and webhook signature verification
-globs: apps/api/src/middleware/**/*.ts,apps/api/src/steps/webhooks/**/*.ts
+globs: apps/api/src/plugins/**/*.ts,apps/api/src/routes/webhooks/**/*.ts
 alwaysApply: false
 ---
 
 # API security
 
-Middleware order, signature verification, and secret handling for the
-Bridge API and webhook endpoints. Deep-dive:
+Plugin order, signature verification, and secret handling for the
+Bridge API and webhook routes. Deep-dive:
 `.cursor/skills/api-security/SKILL.md`.
 
-## Middleware order (fixed)
+## Plugin order (fixed, in `server.ts`)
 
-HTTP bridge:
-
-```ts
-middleware: [rateLimiter, apiKeyAuth, wideEventMiddleware]
+```
+securityHeaders -> rateLimiter -> apiKeyAuth -> wideEvent
 ```
 
-Webhook (auth via `x-api-key`; no rate limit so a legitimate burst from
-the caller can't DoS itself):
+These are global Fastify plugins; there is no per-route middleware
+list. `wideEvent` is **always last** (observes final response via
+`onResponse`). `rateLimiter` runs before `apiKeyAuth` **on purpose**
+so unauth traffic still consumes budget. Do not reorder.
 
-```ts
-middleware: [apiKeyAuth, wideEventMiddleware]
-```
-
-`wideEventMiddleware` is **always last** (observes final response).
-`rateLimiter` runs before auth **on purpose** so unauth traffic still
-consumes budget. Do not reorder.
+Webhook routes flow through all four. `x-api-key` is the auth gate;
+the HMAC is telemetry (see below). Rate limiting stays on.
 
 ## Webhook signatures
 
@@ -48,7 +43,8 @@ function verifyWebhookSignature(rawBody: string, signature: string | undefined):
 - Always `crypto.timingSafeEqual` with **equal-length buffers**. A
   length mismatch throws -- short-circuit first.
 - HMAC the **raw** request body, not `JSON.stringify(req.body)` (key
-  order is not preserved). Motia exposes the raw body; use it.
+  order is not preserved). Opt into `fastify-raw-body` per route
+  with `config: { rawBody: true }` and use `req.rawBody`.
 - Signature outcome is **telemetry, not auth**. `x-api-key` already
   gates the route via the global `apiKeyAuth` plugin, so never 401 on a
   bad/missing signature. Record
@@ -77,7 +73,7 @@ function verifyWebhookSignature(rawBody: string, signature: string | undefined):
 - Never log, return, or echo: `x-api-key`, `Authorization`,
   `WEBHOOK_SECRET`, `FMCSA_WEB_KEY`, bearer tokens, cookies.
 - For correlation, hash: `hashApiKey(key)` in
-  [wide-event.middleware.ts](mdc:apps/api/src/middleware/wide-event.middleware.ts)
+  [plugins/wide-event.ts](mdc:apps/api/src/plugins/wide-event.ts)
   (sha256, first 12 chars) -- already emitted as `api_key_hash`.
 
 ## Rate limiter
@@ -90,8 +86,10 @@ adds `x-forwarded-for`, which is client-controlled and spoofable).
 `apiKeyAuth` bypasses `/api/v1/health` explicitly:
 
 ```ts
-if (ctx.trigger.path === '/api/v1/health') return next()
+if (req.url.startsWith('/api/v1/health')) return
 ```
 
 Any new bypass needs a comment naming the caller and the threat model.
-Never bypass based on `req.headers` alone.
+Never bypass based on `req.headers` alone. The Swagger UI
+(`/docs/**`) carve-out allows `?api_key=...` on the query string for
+that path only -- scope any similar carve-out narrowly.

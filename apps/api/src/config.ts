@@ -29,7 +29,7 @@ const optionalStringWithDefault = (fallback: string) =>
 const EnvSchema = z.object({
   NODE_ENV: optionalStringWithDefault('development'),
 
-  // HTTP / Motia runtime
+  // HTTP / Fastify runtime
   HTTP_PORT: optionalStringWithDefault('3111'),
   STREAM_PORT: optionalStringWithDefault('3112'),
   DASHBOARD_ORIGIN: optionalStringWithDefault('https://dashboard.example.com'),

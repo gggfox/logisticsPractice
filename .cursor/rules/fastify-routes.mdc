@@ -1,0 +1,114 @@
+---
+description: Fastify route / worker / cron authoring conventions for apps/api
+globs: apps/api/src/routes/**/*.ts,apps/api/src/workers/**/*.ts,apps/api/src/cron/**/*.ts
+alwaysApply: false
+---
+
+# Fastify route authoring
+
+`apps/api` is a Fastify app. HTTP handlers live under
+`apps/api/src/routes/**`, async processors under
+`apps/api/src/workers/**`, scheduled jobs under `apps/api/src/cron/**`.
+Deep-dive: `.cursor/skills/fastify-routes/SKILL.md`. Pairs with
+`.cursor/rules/wide-event-logging.mdc`.
+
+## Route file shape
+
+Every route file default-exports a `FastifyPluginAsync` and registers
+exactly one URL. `server.ts` mounts all of them via `routes/index.ts`.
+
+```ts
+import type { FastifyPluginAsync } from 'fastify'
+import type { ZodTypeProvider } from 'fastify-type-provider-zod'
+
+const route: FastifyPluginAsync = async (app) => {
+  app.withTypeProvider<ZodTypeProvider>().post(
+    '/api/v1/thing',
+    { schema: { body: BodySchema, response: { 200: OkSchema } } },
+    async (req, reply) => { /* ... */ },
+  )
+}
+
+export default route
+```
+
+- Always `.withTypeProvider<ZodTypeProvider>()` when using Zod schemas
+  in `schema`; otherwise request params are untyped.
+- Keep one route per file; register it in `routes/index.ts`.
+- HTTP methods that mutate must declare `body` in `schema`; Fastify +
+  the Zod provider will 400 on invalid input automatically.
+
+## Plugin / middleware order
+
+Registered globally in `server.ts` (don't re-register per-route):
+
+```
+securityHeaders -> rateLimiter -> apiKeyAuth -> wideEvent
+```
+
+- `apiKeyAuth` is a `preHandler` that bypasses `/api/v1/health` and
+  accepts `?api_key=...` only under `/docs/**` (for Swagger UI).
+- `wideEvent` is **always last** so it observes the final status code.
+- Webhook routes opt in to `fastify-raw-body` via route-level config
+  (`config: { rawBody: true }`) and verify HMAC inside the handler
+  using `req.rawBody`.
+
+## Schemas
+
+- `body: SomeZodSchema` / `querystring: SomeZodSchema` /
+  `params: SomeZodSchema` are validated by the Zod provider. `req.body`
+  / `req.query` / `req.params` are typed from the schema.
+- `response: { 200: OutputSchema }` enables response serialization.
+  Omit when Convex widens a type and would break the handler return;
+  the canonical contract still lives in `@carrier-sales/shared`.
+- Never `as any` to force a schema through. If there's a v3/v4 mismatch,
+  use `asStepSchema` from `apps/api/src/lib/zod-schema.ts` (the single
+  audited bridge).
+
+## Response bodies
+
+Non-2xx bodies must be `{ error, message, statusCode }`:
+
+```ts
+return reply.code(404).send({
+  error: 'Not Found',
+  message: `Load ${load_id} not found`,
+  statusCode: 404,
+})
+```
+
+Never `throw` for expected 4xx -- use `reply.code(...).send(...)`.
+Unexpected errors propagate to the global error handler in `server.ts`,
+which maps to a 500 with the same shape.
+
+## Observability
+
+- HTTP routes: call `enrichWideEvent(req, { ... })` at every meaningful
+  branch. The `wideEvent` plugin emits the canonical log on response.
+- Queue workers / cron jobs: wrap the whole handler in
+  `withWideEvent('Name', { logger, seed }, async (enrich) => { ... })`
+  -- never mix patterns.
+- In every `catch`, add `enrichWideEvent(req, { failure_stage: '...' })`
+  (routes) or `enrich({ failure_stage: '...' })` (workers / cron)
+  before returning 5xx / rethrowing.
+- Metric attributes stay LOW cardinality (`outcome`, `result`, `round`
+  as string). High-cardinality fields (`call_id`, `load_id`,
+  `mc_number`) go on the wide event. See `wide-event-logging.mdc`.
+
+## Enqueues
+
+- Topics live in `QUEUE_NAMES` in `apps/api/src/queues/index.ts`. Input
+  schemas (`ClassifyCallInputSchema`, ...) are the contract between
+  producer and worker.
+- Producer: `await classifyCallQueue.add(QUEUE_NAMES.classifyCall, data)`.
+- Consumer: `new Worker(QUEUE_NAMES.classifyCall, handler, { connection })`
+  with `Schema.parse(job.data)` at the top of the handler.
+
+## Don'ts
+
+- No raw `console.log` -- use `req.log.*` (routes) or `logger.*`
+  (workers / cron).
+- No second canonical `logger.info` line per request -- the wide event
+  is the canonical log.
+- No `z.date()` anywhere; timestamps are ISO `string`.
+- No raw Zod schema cast with `as any` to satisfy a response schema.

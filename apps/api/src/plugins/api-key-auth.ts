@@ -4,7 +4,7 @@
  * Accepts either the bridge key (general use) or the admin key (e.g.
  * `/api/v1/admin/seed`). `/api/v1/health` is explicitly bypassed so
  * container healthchecks and Traefik liveness probes can hit it without
- * a secret -- same carve-out as the old Motia middleware.
+ * a secret.
  *
  * 401 responses use `{ error, message, statusCode }` -- identical shape
  * for "missing" and "invalid" to avoid an oracle.

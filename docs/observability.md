@@ -47,7 +47,7 @@ Every wide event includes:
 | `service_version`    | string                 | `SERVICE_VERSION` (git sha in prod).      |
 | `service_namespace`  | string                 | `development` / `production`.             |
 | `deployment_region`  | string                 | `DEPLOYMENT_REGION` (e.g. `hostinger-eu`).|
-| `step_name`          | string                 | Handler name (`FindLoad`, `ClassifyCall`, ...). Carried over from the Motia-era naming so SigNoz dashboards still filter on it. |
+| `step_name`          | string                 | Handler name (`FindLoad`, `ClassifyCall`, ...). Kept as `step_name` for dashboard compatibility even though the Fastify backend calls these "routes" / "workers" / "crons". |
 | `trigger_type`       | `api` / `queue` / `cron` | -                                       |
 | `trigger_path`       | string?                | HTTP path for api triggers.               |
 | `trigger_method`     | string?                | HTTP method for api triggers.             |

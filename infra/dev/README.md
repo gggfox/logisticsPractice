@@ -21,7 +21,7 @@ What you get:
 | Service    | Host URL                | Notes                                 |
 | ---------- | ----------------------- | ------------------------------------- |
 | API        | http://localhost:3111   | Fastify; tsx watch auto-reloads       |
-| API stream | http://localhost:3112   | Motia stream port                     |
+| API stream | http://localhost:3112   | Reserved (legacy, unused by Fastify)  |
 | Dashboard  | http://localhost:3000   | Vite dev + HMR                        |
 | Redis      | redis://localhost:6379  | BullMQ backend                        |
 | SigNoz UI  | http://localhost:8080   | Traces/metrics/logs                   |

@@ -24,7 +24,7 @@ Carrier (Phone/Web) --> HappyRobot Voice AI Agent
 **Core Components:**
 
 - **HappyRobot Voice Agent**: Handles live carrier conversations using registered API tools
-- **Bridge API (Motia)**: RESTful endpoints that HappyRobot calls during conversations to verify carriers, search loads, and process negotiations
+- **Bridge API (Fastify)**: RESTful endpoints that HappyRobot calls during conversations to verify carriers, search loads, and process negotiations
 - **Convex Database**: Real-time document database with live subscriptions powering the dashboard
 - **Analytics Dashboard**: React-based command center showing KPIs, call history, load board, carrier intelligence, and negotiation analytics
 
@@ -118,7 +118,7 @@ All views update in real time via Convex database subscriptions -- no polling, n
 
 The architecture is designed to scale with Acme Logistics' growth:
 
-- **Motia's event-driven steps** decouple call processing from API response times
+- **BullMQ queues behind Fastify webhook routes** decouple call processing from API response times
 - **Convex** handles concurrent real-time subscriptions across multiple dashboard users
 - **Hourly metric aggregation** ensures dashboard performance remains constant regardless of call volume
 - **Carrier cache** reduces FMCSA API dependency from every call to once per carrier per day
@@ -131,7 +131,7 @@ The architecture is designed to scale with Acme Logistics' growth:
 | Layer | Technology | Rationale |
 |-------|-----------|-----------|
 | Voice AI | HappyRobot | Purpose-built for freight, Bridge API integration |
-| Backend | Motia (Node.js) | Event-driven steps, built-in observability, trace propagation |
+| Backend | Fastify + BullMQ + Croner (Node.js) | Typed routes with Zod validation, BullMQ-backed async processing, cron scheduling, OTel auto-instrumentation |
 | Database | Convex | Real-time subscriptions, end-to-end TypeScript, zero config |
 | Frontend | React + Tremor + Recharts | Production-ready dashboard components, dark mode |
 | Validation | Zod | Single source of truth for types and runtime validation |

@@ -1,0 +1,25 @@
+meta {
+  name: Verify carrier
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/api/v1/carriers/{{mcNumber}}
+  body: none
+  auth: none
+}
+
+headers {
+  x-api-key: {{apiKey}}
+  Accept: application/json
+}
+
+docs {
+  Verify a carrier by MC number via FMCSA.
+
+  NOTE: our /api/v1/carriers/:mc route proxies to FMCSA's
+  /qc/services/carriers/{id} endpoint, which FMCSA treats as a *DOT*
+  number -- not an MC docket. Use DOT values with our API; use MC
+  values only with the direct MC-docket FMCSA endpoint.
+}

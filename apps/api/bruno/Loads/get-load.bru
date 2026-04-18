@@ -1,0 +1,20 @@
+meta {
+  name: Get load
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/api/v1/loads/{{loadId}}
+  body: none
+  auth: none
+}
+
+headers {
+  x-api-key: {{apiKey}}
+  Accept: application/json
+}
+
+docs {
+  Fetch a specific load by its load_id.
+}

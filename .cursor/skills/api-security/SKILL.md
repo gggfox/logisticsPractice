@@ -1,6 +1,6 @@
 ---
 name: api-security
-description: Harden Motia API endpoints with API-key auth, rate limiting, and HMAC webhook signature verification; handle secrets safely via config. Use when writing or modifying middleware in apps/api/src/middleware, webhook steps in apps/api/src/steps/webhooks, or any code that touches api keys, bearer tokens, webhook secrets, or HMAC signatures.
+description: Harden Fastify API endpoints with API-key auth, rate limiting, and HMAC webhook signature verification; handle secrets safely via config. Use when writing or modifying plugins in apps/api/src/plugins, webhook routes in apps/api/src/routes/webhooks, or any code that touches api keys, bearer tokens, webhook secrets, or HMAC signatures.
 ---
 
 # API security
@@ -11,7 +11,7 @@ webhook verifies an HMAC-SHA256 signature on the raw body. This skill
 codifies how to keep those guarantees intact.
 
 Quick reference: `.cursor/rules/api-security.mdc`. Related:
-`.cursor/rules/motia-steps.mdc`,
+`.cursor/rules/fastify-routes.mdc`,
 `.cursor/rules/wide-event-logging.mdc`.
 
 ## Threat model (short)
@@ -24,58 +24,63 @@ Quick reference: `.cursor/rules/api-security.mdc`. Related:
 - The rate limiter exists to cap budget for *anyone* with a key,
   including ourselves -- not just anonymous traffic.
 
-## Middleware order
+## Plugin order (global, in `server.ts`)
 
-HTTP bridge endpoints (`apps/api/src/steps/bridge/**`):
-
-```ts
-middleware: [rateLimiter, apiKeyAuth, wideEventMiddleware]
+```
+securityHeaders -> rateLimiter -> apiKeyAuth -> wideEvent
 ```
 
-Webhook endpoints (`apps/api/src/steps/webhooks/**`):
-
-```ts
-middleware: [apiKeyAuth, wideEventMiddleware]
-```
+These are registered as Fastify plugins before `routes` in
+`apps/api/src/server.ts` and apply to every route. There is no
+per-route middleware list.
 
 Fixed rules:
 
-- `wideEventMiddleware` is **last**. It wraps `next()` in try/finally
-  so it always observes the final status and captures errors.
+- `wideEvent` is **last**. It hooks `onResponse` + `onError` so it
+  always observes the final status and captures errors.
 - `rateLimiter` runs **before** `apiKeyAuth`. Rejecting 401s without
   charging budget means an attacker can flood us without being rate
   limited. Keep the order.
-- Webhooks skip the rate limiter: HappyRobot is a known caller, the
-  signature is the gate, and legitimate burst traffic (end of a call
-  batch) should not 429.
+- Webhook routes still flow through all four plugins. `x-api-key` is
+  the auth gate; the HMAC is telemetry only (see below). If you ever
+  need true signature-gated webhooks, do it inside the route handler
+  before any side effects, not by reordering plugins.
 
 ## API key auth
 
-Shape is fixed; copy from
-[api-key-auth.ts](../../../apps/api/src/middleware/api-key-auth.ts):
+Shape is fixed; the real implementation lives in
+[api-key-auth.ts](../../../apps/api/src/plugins/api-key-auth.ts) and
+is registered as a Fastify plugin via a `preHandler` hook:
 
 ```ts
-export const apiKeyAuth: ApiMiddleware = async (req, ctx, next) => {
-  if (ctx.trigger.path === '/api/v1/health') return next()
+const plugin: FastifyPluginAsync = async (app) => {
+  app.addHook('preHandler', async (req, reply) => {
+    if (req.url.startsWith('/api/v1/health')) return
+    // /docs/** can fall back to ?api_key=... for Swagger UI in a browser tab
+    const apiKey =
+      req.headers['x-api-key'] ??
+      (req.url.startsWith('/docs') ? (req.query as { api_key?: string }).api_key : undefined)
 
-  const apiKey = req.headers['x-api-key']
-  if (!apiKey) {
-    return {
-      status: 401,
-      body: { error: 'Unauthorized', message: 'Missing x-api-key header', statusCode: 401 },
+    if (!apiKey) {
+      return reply.code(401).send({
+        error: 'Unauthorized',
+        message: 'Missing x-api-key header',
+        statusCode: 401,
+      })
     }
-  }
 
-  const validKeys = [config.bridge.apiKey, config.bridge.adminKey]
-  if (!validKeys.includes(apiKey as string)) {
-    return {
-      status: 401,
-      body: { error: 'Unauthorized', message: 'Invalid API key', statusCode: 401 },
+    const validKeys = [config.bridge.apiKey, config.bridge.adminKey]
+    if (!validKeys.includes(apiKey as string)) {
+      return reply.code(401).send({
+        error: 'Unauthorized',
+        message: 'Invalid API key',
+        statusCode: 401,
+      })
     }
-  }
-
-  return next()
+  })
 }
+
+export default fp(plugin)
 ```
 
 Rules:
@@ -86,12 +91,13 @@ Rules:
   tiny and fixed, and both values come from `config.*`. If the set
   grows, switch to `crypto.timingSafeEqual` on a per-key basis -- but
   don't prematurely add it here; `.includes` is fine for N=2.
-- The bypass is **path-based** on `ctx.trigger.path`, not on a header.
-  A header-based bypass is an immediate auth escape.
+- The bypass is **path-based** on `req.url`, not on a header. A
+  header-based bypass is an immediate auth escape. The `/docs/**`
+  query-string fallback is a Swagger-UI-only carve-out.
 
 ### Adding a new bypass
 
-Before adding another `if (ctx.trigger.path === '...')` branch:
+Before adding another `if (req.url.startsWith('...'))` branch:
 
 1. Ask: could the endpoint require a key instead? (Usually yes.)
 2. If no (e.g. public OpenAPI docs), add a comment naming the caller
@@ -100,19 +106,22 @@ Before adding another `if (ctx.trigger.path === '...')` branch:
 
 ## Rate limiter
 
-Reference: [rate-limiter.ts](../../../apps/api/src/middleware/rate-limiter.ts).
+Reference: [rate-limiter.ts](../../../apps/api/src/plugins/rate-limiter.ts).
+Built on `@fastify/rate-limit`.
 
 - Keyed by `x-api-key` header, falling back to `'anonymous'`. Never
   key by `x-forwarded-for` / IP alone -- Traefik sets that header
   from a client-controlled value.
 - Limits live in `packages/shared/src/constants/index.ts` (`RATE_LIMIT`).
   Bump deliberately; they're shared with docs.
-- Stores state in an in-process `Map`. For a multi-worker deployment,
-  this means each worker has its own budget. Acceptable today (one
-  worker), but if scaling horizontally becomes a need, move state to
-  Redis (already in the stack) keyed by `x-api-key`.
-- On 429, return `Retry-After` in seconds and
-  `{ error, message, statusCode }` in the body.
+- Stores state in an in-process map inside `@fastify/rate-limit`. For
+  a multi-instance deployment, each instance has its own budget.
+  Acceptable today; if horizontal scale becomes real, switch to the
+  `redis` store that `@fastify/rate-limit` ships (Redis is already in
+  the stack).
+- On 429, the plugin adds `Retry-After` automatically; our
+  `errorResponseBuilder` shapes the body to `{ error, message,
+  statusCode }`.
 
 ## Webhook signature verification
 
@@ -191,7 +200,7 @@ All of them:
 
 ### Never
 
-- Log a secret: `ctx.logger.info('key', { apiKey })` -- no.
+- Log a secret: `req.log.info({ apiKey }, 'key')` -- no.
 - Return a secret in a response body (even an error).
 - Include a secret in a URL logged to wide event (`url: fmcsaUrl`).
   URLs can have query-string secrets.
@@ -200,7 +209,7 @@ All of them:
 
 ### For correlation, hash
 
-`wide-event.middleware.ts` hashes the api key to 12 chars:
+`plugins/wide-event.ts` hashes the api key to 12 chars:
 
 ```ts
 function hashApiKey(key: string | undefined): string | undefined {
@@ -224,7 +233,7 @@ admin traffic in queries without revealing the secret.
 
 ## Checklist
 
-- [ ] Middleware order matches the rule's table for the endpoint kind
+- [ ] Plugin order in `server.ts` is unchanged
 - [ ] No new path-based bypass in `apiKeyAuth` without a comment
 - [ ] Webhook verifier length-guards before `timingSafeEqual`
 - [ ] Webhook HMACs the raw body, not a re-serialized object

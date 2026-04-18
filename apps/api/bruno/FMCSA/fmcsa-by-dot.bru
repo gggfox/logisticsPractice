@@ -1,0 +1,25 @@
+meta {
+  name: FMCSA by DOT
+  type: http
+  seq: 1
+}
+
+get {
+  url: https://mobile.fmcsa.dot.gov/qc/services/carriers/{{dotSchneider}}?webKey={{fmcsaWebKey}}
+  body: none
+  auth: none
+}
+
+params:query {
+  webKey: {{fmcsaWebKey}}
+}
+
+headers {
+  Accept: application/json
+}
+
+docs {
+  Call FMCSA's QCMobile API directly (bypasses our API + cache). This is
+  the same endpoint our fmcsa.service.ts uses. Useful for comparing cached
+  vs live data, or debugging when our API returns NOT_FOUND.
+}
