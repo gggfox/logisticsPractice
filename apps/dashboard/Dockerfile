@@ -28,8 +28,8 @@ COPY --from=builder /app/apps/dashboard/dist /usr/share/nginx/html
 
 EXPOSE 80
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost/ || exit 1
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+  CMD wget --no-verbose --tries=1 --spider http://127.0.0.1/ || exit 1
 
 LABEL org.opencontainers.image.title="Carrier Sales Dashboard" \
       org.opencontainers.image.description="React analytics dashboard for HappyRobot carrier sales automation"
