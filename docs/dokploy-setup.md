@@ -44,10 +44,13 @@ In the Dokploy UI:
    - Build Context: `.` (monorepo root)
 5. **Network**:
    - Container Port: `3111` (Fastify HTTP)
-   - Attach the `signoz-net` Docker network so the API can push OTLP to the
-     SigNoz collector (see [section 9](#9-observability-stack-signoz)).
-   - Attach the same Docker network as the Redis service so BullMQ can
-     reach it at `redis://redis:6379`.
+   - No extra network attachment is needed. Dokploy auto-joins every
+     swarm-service app to its default `dokploy-network` overlay, which is
+     also where the Redis service (BullMQ) lives and where the
+     `signoz-otel-collector` container joins (see
+     [section 9](#9-observability-stack-signoz)). Do **not** try to attach
+     the `signoz-net` bridge network -- Swarm rejects bridge networks with
+     `Only networks scoped to the swarm can be used`.
 6. **Environment Variables** (paste into the Env tab):
    ```env
    HTTP_PORT=3111
@@ -64,6 +67,8 @@ In the Dokploy UI:
    REDIS_URL=redis://redis:6379
 
    # Observability (see section 9). Exporter is OTLP-HTTP on port 4318.
+   # `signoz-otel-collector` is reachable because the otel-collector service
+   # in infra/signoz/docker-compose.yml is attached to `dokploy-network`.
    OTEL_ENABLED=true
    OTEL_EXPORTER_OTLP_ENDPOINT=http://signoz-otel-collector:4318
    OTEL_SERVICE_NAME=carrier-sales-api
@@ -136,7 +141,7 @@ All runtime secrets live in Dokploy's per-application Env tab. To rotate:
 | API container restarts in a loop | Missing required env var | Check `apps/api` logs; compare against `.env.example` |
 | HTTPS cert not issued | DNS not propagated or port 80/443 blocked | Confirm A records and that Hostinger firewall allows 80/443 |
 | Push to `main` didn't trigger a build | GitHub App not installed on the repo | Reinstall the Dokploy GitHub App against this repo |
-| API boots but no traces in SigNoz | `signoz-net` not attached to the API app, or `OTEL_EXPORTER_OTLP_ENDPOINT` still pointing at `:4317` | In Dokploy -> api -> Advanced -> Networks, attach `signoz-net`; ensure the endpoint uses port `4318` (HTTP), not `4317`; Redeploy |
+| API boots but no traces in SigNoz | `OTEL_ENABLED=false`, `OTEL_EXPORTER_OTLP_ENDPOINT` still pointing at `:4317`, or the otel-collector isn't on `dokploy-network` | Set `OTEL_ENABLED=true` and use port `4318` (HTTP), not `4317`. Confirm `infra/signoz/docker-compose.yml` declares `dokploy-network` as `external: true` and attaches it to `otel-collector`; redeploy the signoz compose, then Redeploy the api. Never attach `signoz-net` (bridge) to the api -- Swarm rejects it with `Only networks scoped to the swarm can be used` |
 | API boots but BullMQ workers never pick up jobs | `REDIS_URL` unreachable | Confirm the Redis app is running and reachable at `redis://redis:6379` from the `api` container |
 
 ## 9. Observability Stack (SigNoz)
@@ -179,11 +184,23 @@ The API pushes OpenTelemetry traces, metrics, and logs to a self-hosted
 
 ### 9.3 Wire the API into SigNoz
 
-1. Open the `api` application -> **Advanced -> Networks**.
-2. Attach the `signoz-net` Docker network (created by the compose above).
-3. Confirm the `OTEL_*` env vars from [section 3.6](#3-create-the-api-application)
-   are set.
-4. Redeploy the `api` application.
+No per-app network attachment is needed. The signoz compose
+([`infra/signoz/docker-compose.yml`](../infra/signoz/docker-compose.yml))
+attaches `signoz-otel-collector` to the external `dokploy-network`
+overlay, which every Dokploy swarm-service app already joins. So:
+
+1. Confirm the `OTEL_*` env vars from
+   [section 3.6](#3-create-the-api-application) are set on the `api` app --
+   in particular `OTEL_ENABLED=true` and
+   `OTEL_EXPORTER_OTLP_ENDPOINT=http://signoz-otel-collector:4318`.
+2. Redeploy the `api` application.
+
+> **Why not `signoz-net`?** `signoz-net` is a bridge network (the signoz
+> compose is a regular `docker compose` stack, not a swarm stack). Dokploy
+> apps run as Swarm services, which refuse to attach to bridge networks
+> (`Only networks scoped to the swarm can be used`). The solution is to
+> bridge the two sides on `dokploy-network`, the overlay Dokploy creates
+> and auto-attaches to every swarm service.
 
 ### 9.4 Verify
 

@@ -176,7 +176,18 @@ services:
     restart: on-failure
 
   otel-collector:
-    <<: *common
+    # Inherit restart+logging from *common but NOT its `networks: [signoz-net]`,
+    # because this service must also join `dokploy-network` so Dokploy-managed
+    # swarm apps (the `api`) can reach `signoz-otel-collector:4318` by DNS. The
+    # list-form networks field in *common would otherwise win the YAML merge.
+    restart: unless-stopped
+    logging:
+      options:
+        max-size: 50m
+        max-file: "3"
+    networks:
+      - signoz-net
+      - dokploy-network
     image: signoz/signoz-otel-collector:${SIGNOZ_OTELCOL_VERSION:-v0.144.2}
     container_name: signoz-otel-collector
     depends_on:
@@ -203,17 +214,22 @@ services:
           --copy-path=/var/tmp/collector-config.yaml
     volumes:
       - signoz-configs:/signoz-configs:ro
-    # Only expose OTLP ports on the internal Docker network. The `api` container
-    # reaches the collector via the shared Dokploy network using the service DNS
-    # `signoz-otel-collector:4317`. Do NOT publish these to the host.
+    # OTLP ports are not published to the host. In production the `api`
+    # Dokploy app reaches the collector over the shared `dokploy-network`
+    # overlay via the service DNS `signoz-otel-collector:4318`.
 
 networks:
   signoz-net:
     name: signoz-net
-    # Also attach this network from the `api` app in Dokploy so the API can push
-    # OTLP traffic to `signoz-otel-collector:4317`. In Dokploy, open the `api`
-    # application -> Advanced -> Networks -> add `signoz-net`.
     driver: bridge
+  # Dokploy auto-creates `dokploy-network` as an attachable overlay and joins
+  # every swarm-service app to it by default. Declaring it `external: true`
+  # here lets the otel-collector receive OTLP traffic from the `api` app
+  # without requiring the api to attach a bridge network (which Swarm rejects
+  # with "Only networks scoped to the swarm can be used").
+  dokploy-network:
+    name: dokploy-network
+    external: true
 
 volumes:
   signoz-configs:
