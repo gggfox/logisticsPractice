@@ -66,7 +66,11 @@ services:
     volumes:
       - clickhouse-user-scripts:/var/lib/clickhouse/user_scripts
 
-  zookeeper:
+  # Service name must match SigNoz upstream's ClickHouse `cluster.xml`,
+  # which hardcodes the zookeeper host as `zookeeper-1`. Renaming this
+  # service avoids noisy `Host not found: zookeeper-1` DDLWorker errors
+  # in the ClickHouse logs.
+  zookeeper-1:
     <<: *common
     image: signoz/zookeeper:3.7.1
     container_name: signoz-zookeeper
@@ -93,7 +97,7 @@ services:
     depends_on:
       init-clickhouse:
         condition: service_completed_successfully
-      zookeeper:
+      zookeeper-1:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "0.0.0.0:8123/ping"]
@@ -135,7 +139,7 @@ services:
       - SIGNOZ_ALERTMANAGER_PROVIDER=signoz
       - SIGNOZ_TELEMETRYSTORE_CLICKHOUSE_DSN=tcp://clickhouse:9000
       - SIGNOZ_SQLSTORE_SQLITE_PATH=/var/lib/signoz/signoz.db
-      - SIGNOZ_TOKENIZER_JWT_SECRET=${SIGNOZ_JWT_SECRET:-change-me-in-dokploy}
+      - "SIGNOZ_TOKENIZER_JWT_SECRET=${SIGNOZ_JWT_SECRET:?SIGNOZ_JWT_SECRET is required - generate with openssl rand -base64 32}"
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "localhost:8080/api/v1/health"]
       interval: 30s

@@ -62,6 +62,9 @@ const EnvSchema = z.object({
   DEPLOYMENT_REGION: optionalStringWithDefault('local'),
   WIDE_EVENT_SLOW_MS: optionalStringWithDefault('2000'),
   WIDE_EVENT_SUCCESS_SAMPLE_RATE: optionalStringWithDefault('1.0'),
+  // When true, an `x-debug: 1|true` request header forces wide-event emission
+  // regardless of success sampling. Client-controlled; keep disabled in prod.
+  DEBUG_HEADER_ENABLED: optionalStringWithDefault('false'),
 })
 
 type Env = z.infer<typeof EnvSchema>
@@ -139,6 +142,7 @@ export const config = {
     otelEndpoint: env.OTEL_EXPORTER_OTLP_ENDPOINT,
     slowMs: toIntOrFallback(env.WIDE_EVENT_SLOW_MS, 2000),
     successSampleRate: toFloatOrFallback(env.WIDE_EVENT_SUCCESS_SAMPLE_RATE, 1),
+    debugHeaderEnabled: env.DEBUG_HEADER_ENABLED.toLowerCase() === 'true',
   },
 } as const
 
@@ -192,6 +196,7 @@ function printBootSummary(): void {
   )
   kv('observability.slowMs', String(config.observability.slowMs))
   kv('observability.successSampleRate', String(config.observability.successSampleRate))
+  kv('observability.debugHeaderEnabled', String(config.observability.debugHeaderEnabled))
 
   // Single multi-line write keeps the block visually grouped even under
   // concurrent stdout writers (iii workers, OTel logs exporter).

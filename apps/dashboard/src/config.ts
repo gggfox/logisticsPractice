@@ -34,8 +34,9 @@ declare global {
 }
 
 // Boot log, once per page load. Guarded against module-level re-evaluation
-// from tooling (HMR, tests).
-if (!globalThis.__CARRIER_SALES_DASHBOARD_CONFIG_PRINTED__) {
+// from tooling (HMR, tests). Only emitted in dev builds; production builds
+// shouldn't log the backend URL to the browser console.
+if (import.meta.env.DEV && !globalThis.__CARRIER_SALES_DASHBOARD_CONFIG_PRINTED__) {
   globalThis.__CARRIER_SALES_DASHBOARD_CONFIG_PRINTED__ = true
   const displayed = convexUrlWasNormalized
     ? `${normalizedConvexUrl}  (normalized from "${rawConvexUrl}")`

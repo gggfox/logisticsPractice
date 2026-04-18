@@ -1,0 +1,25 @@
+# Local-dev infrastructure for `pnpm dev`.
+#
+# Boots only the runtime dependencies the API actually requires on a
+# developer laptop (currently: Redis for BullMQ). The heavier SigNoz
+# stack is a separate compose file under infra/signoz/ so you don't pay
+# its ClickHouse / zookeeper footprint unless you want traces locally.
+#
+# Usage:
+#   docker compose -f infra/dev/docker-compose.yml up -d
+#   docker compose -f infra/dev/docker-compose.yml down
+#
+# See infra/dev/README.md for the full local-dev recipe.
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: carrier-sales-dev-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped

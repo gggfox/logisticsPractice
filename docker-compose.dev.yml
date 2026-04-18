@@ -1,27 +1,91 @@
+# One-command local dev: `pnpm dev:all`
+#
+# Brings up api + dashboard (with hot reload) + Redis + the full SigNoz
+# stack in a single `docker compose` invocation. Source is bind-mounted
+# from the host; node_modules lives in named volumes per container so
+# the host's pnpm cache never collides with the container's install.
+#
+# Prod compose files (docker-compose.yml, apps/*/Dockerfile,
+# infra/signoz/docker-compose.yml) stay untouched.
+
+include:
+  - path:
+      - infra/signoz/docker-compose.yml
+      - infra/signoz/docker-compose.dev.override.yml
+
 services:
+  redis:
+    image: redis:7-alpine
+    container_name: carrier-sales-dev-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+
   api:
     build:
       context: .
-      dockerfile: apps/api/Dockerfile
+      dockerfile: apps/api/Dockerfile.dev
+    container_name: carrier-sales-dev-api
+    env_file: .env
+    # Compose `environment:` takes precedence over env_file, so host
+    # values in .env (redis://localhost:6379, http://localhost:4317)
+    # get correctly overridden to the container-internal DNS names.
+    environment:
+      REDIS_URL: redis://redis:6379
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://signoz-otel-collector:4317
+      CHOKIDAR_USEPOLLING: "true"
+      CHOKIDAR_INTERVAL: "500"
     ports:
       - "3111:3111"
       - "3112:3112"
-    env_file: .env
+    volumes:
+      - ./apps/api:/app/apps/api
+      - ./packages:/app/packages
+      # Mount the repo-root .env so `tsx watch --env-file=../../.env`
+      # (resolved from /app/apps/api to /app/.env) works inside the
+      # container. `env_file: .env` above still injects vars into the
+      # container's process env; this mount is specifically for the
+      # `--env-file` flag in apps/api/package.json's dev script.
+      - ./.env:/app/.env:ro
+      # Anonymous-but-named volumes keep container-installed
+      # node_modules isolated from whatever the host has under
+      # apps/api/node_modules -- otherwise the bind-mount would shadow
+      # the image's deps.
+      - api_root_node_modules:/app/node_modules
+      - api_app_node_modules:/app/apps/api/node_modules
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - default
+      - signoz-net
     restart: unless-stopped
 
   dashboard:
-    image: node:22-alpine
-    working_dir: /app
-    volumes:
-      - ./apps/dashboard:/app
-      - ./packages:/packages
-      - dashboard_modules:/app/node_modules
-    command: sh -c "corepack enable && pnpm install && pnpm dev --host"
+    build:
+      context: .
+      dockerfile: apps/dashboard/Dockerfile.dev
+    container_name: carrier-sales-dev-dashboard
+    env_file: .env
+    environment:
+      CHOKIDAR_USEPOLLING: "true"
+      CHOKIDAR_INTERVAL: "500"
     ports:
       - "3000:3000"
-    environment:
-      - VITE_CONVEX_URL=${VITE_CONVEX_URL:-https://placeholder.convex.cloud}
+    volumes:
+      - ./apps/dashboard:/app/apps/dashboard
+      - ./packages:/app/packages
+      - dashboard_root_node_modules:/app/node_modules
+      - dashboard_app_node_modules:/app/apps/dashboard/node_modules
     restart: unless-stopped
 
 volumes:
-  dashboard_modules:
+  api_root_node_modules:
+  api_app_node_modules:
+  dashboard_root_node_modules:
+  dashboard_app_node_modules:

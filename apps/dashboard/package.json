@@ -15,7 +15,6 @@
   "dependencies": {
     "@carrier-sales/convex": "workspace:*",
     "@carrier-sales/shared": "workspace:*",
-    "@tanstack/react-router": "^1.90.0",
     "@tremor/react": "^3.18.0",
     "convex": "^1.17.0",
     "leaflet": "^1.9.0",

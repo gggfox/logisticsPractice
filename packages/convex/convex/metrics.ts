@@ -1,20 +1,31 @@
 import { v } from 'convex/values'
 import { mutation, query } from './_generated/server'
 
+// Hard cap for reads reachable anonymously via the deployment URL. Prevents
+// `getSummary` from scanning the whole `calls` table as it grows; also keeps
+// paginated history queries bounded.
+const MAX_ROWS = 1000
+const SUMMARY_SAMPLE = 5000
+
 export const getLatest = query({
   args: {},
   handler: async (ctx) => {
-    const metrics = await ctx.db.query('metrics').withIndex('by_timestamp').order('desc').collect()
-    return metrics[0] ?? null
+    const [latest] = await ctx.db.query('metrics').withIndex('by_timestamp').order('desc').take(1)
+    return latest ?? null
   },
 })
 
 export const getHistory = query({
   args: { limit: v.optional(v.number()) },
   handler: async (ctx, args) => {
-    const limit = args.limit ?? 24
-    const metrics = await ctx.db.query('metrics').withIndex('by_timestamp').order('desc').collect()
-    return metrics.slice(0, limit).reverse()
+    const requested = args.limit ?? 24
+    const limit = Math.min(requested, MAX_ROWS)
+    const metrics = await ctx.db
+      .query('metrics')
+      .withIndex('by_timestamp')
+      .order('desc')
+      .take(limit)
+    return metrics.reverse()
   },
 })
 
@@ -55,7 +66,11 @@ export const write = mutation({
 export const getSummary = query({
   args: {},
   handler: async (ctx) => {
-    const calls = await ctx.db.query('calls').collect()
+    // Bounded sample: a dashboard summary does not need the full call history
+    // and this query is reachable anonymously via the Convex deployment URL.
+    // The aggregate cron writes point-in-time snapshots to the `metrics` table
+    // for accurate long-term values.
+    const calls = await ctx.db.query('calls').take(SUMMARY_SAMPLE)
     const totalCalls = calls.length
     const bookedCalls = calls.filter((c) => c.outcome === 'booked').length
     const bookingRate = totalCalls > 0 ? bookedCalls / totalCalls : 0

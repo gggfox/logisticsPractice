@@ -1,0 +1,30 @@
+# syntax=docker/dockerfile:1.7
+#
+# Dev image for `pnpm dev:all`. Runs the Vite dev server inside the
+# container with the repo bind-mounted from the host, so edits in
+# apps/dashboard/src and packages/* trigger HMR without a rebuild.
+#
+# The prod image at apps/dashboard/Dockerfile stays nginx-based; this
+# file is dev-only.
+
+FROM node:22-alpine
+
+RUN corepack enable && corepack prepare pnpm@latest --activate
+
+WORKDIR /app
+
+# Workspace skeleton so the install layer caches independently of
+# source edits. Source comes in at runtime via a bind-mount.
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml turbo.json tsconfig.base.json ./
+COPY packages/shared/package.json packages/shared/
+COPY packages/convex/package.json packages/convex/
+COPY apps/dashboard/package.json apps/dashboard/
+
+RUN pnpm install --frozen-lockfile
+
+EXPOSE 3000
+
+# --host 0.0.0.0 makes vite listen on all interfaces so the host can
+# reach it; vite.config.ts also sets server.host:true as a belt-and-
+# braces default.
+CMD ["pnpm", "--filter", "@carrier-sales/dashboard", "dev", "--", "--host", "0.0.0.0"]

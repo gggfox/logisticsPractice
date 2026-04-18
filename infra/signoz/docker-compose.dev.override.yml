@@ -1,0 +1,26 @@
+# Local-dev overlay for infra/signoz/docker-compose.yml.
+#
+# The base compose intentionally does NOT publish the OTel collector's
+# OTLP ports to the host -- in Dokploy the API container reaches the
+# collector over the internal `signoz-net` docker network as
+# `signoz-otel-collector:4317`.
+#
+# On a developer laptop the API runs on the host (via `pnpm dev`), so
+# it cannot reach container-internal DNS. This overlay publishes the
+# collector's OTLP gRPC (4317) and HTTP (4318) ports on localhost so
+# the API can export with:
+#   OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+#
+# Usage:
+#   docker compose \
+#     -f infra/signoz/docker-compose.yml \
+#     -f infra/signoz/docker-compose.dev.override.yml \
+#     up -d
+#
+# Do NOT reference this file in any Dokploy / production deploy.
+
+services:
+  otel-collector:
+    ports:
+      - "4317:4317"
+      - "4318:4318"

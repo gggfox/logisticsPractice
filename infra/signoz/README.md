@@ -11,7 +11,7 @@ Deployed alongside the `api` and `dashboard` apps on Dokploy, wired to the Motia
 | `signoz`              | Query service + UI (ClickHouse-backed)               | `8080`    |
 | `otel-collector`      | OTLP gRPC `4317` / HTTP `4318` receivers             | internal  |
 | `clickhouse`          | Columnar store for traces / metrics / logs           | internal  |
-| `zookeeper`           | ClickHouse coordination                              | internal  |
+| `zookeeper-1`         | ClickHouse coordination                              | internal  |
 | `bootstrap-configs`   | One-shot init: pulls SigNoz upstream configs         | -         |
 | `init-clickhouse`     | One-shot init: installs `histogramQuantile` UDF      | -         |
 | `telemetrystore-migrator` | One-shot init: runs schema migrations            | -         |

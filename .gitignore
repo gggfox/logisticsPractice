@@ -6,8 +6,8 @@ coverage/
 
 # Environment
 .env
-.env.local
-.env.production
+.env.*
+!.env.example
 
 # Convex - generated files are committed so Docker builds work without a Convex deployment.
 # Regenerate with `pnpm --filter @carrier-sales/convex dev:codegen`.
@@ -23,5 +23,9 @@ apps/dashboard/playwright-report/
 .DS_Store
 Thumbs.db
 
-# Secrets
+# Secrets / key material
 *.secret.*
+*.pem
+*.key
+*.p12
+*.pfx

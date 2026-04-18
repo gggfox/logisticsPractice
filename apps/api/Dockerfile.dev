@@ -1,0 +1,30 @@
+# syntax=docker/dockerfile:1.7
+#
+# Dev image for `pnpm dev:all`. Runs `tsx watch` inside the container
+# with the repo bind-mounted from the host, so edits in apps/api/src
+# and packages/* reload the process without a rebuild.
+#
+# This is deliberately a single stage: no prod `pnpm deploy`, no runtime
+# trimming, no non-root user. Those belong to apps/api/Dockerfile (prod).
+
+FROM node:22-alpine
+
+RUN corepack enable && corepack prepare pnpm@latest --activate
+
+WORKDIR /app
+
+# Workspace skeleton so `pnpm install` layer caches independently of
+# source edits. Source itself comes in at runtime via a bind-mount.
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml turbo.json tsconfig.base.json ./
+COPY packages/shared/package.json packages/shared/
+COPY packages/convex/package.json packages/convex/
+COPY apps/api/package.json apps/api/
+
+RUN pnpm install --frozen-lockfile
+
+EXPOSE 3111 3112
+
+# tsx watch inside the container. CHOKIDAR_USEPOLLING is set in
+# docker-compose.dev.yml to pick up bind-mounted file changes reliably
+# on macOS.
+CMD ["pnpm", "--filter", "@carrier-sales/api", "dev"]

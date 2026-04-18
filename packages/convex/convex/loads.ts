@@ -1,10 +1,15 @@
 import { v } from 'convex/values'
 import { mutation, query } from './_generated/server'
 
+// Hard cap for reads that are reachable anonymously via the deployment URL.
+// Prevents a runaway client or malicious caller from pulling the whole table
+// and driving up Convex cost. Bump deliberately if a real use case needs more.
+const MAX_ROWS = 1000
+
 export const getAll = query({
   args: {},
   handler: async (ctx) => {
-    return await ctx.db.query('loads').collect()
+    return await ctx.db.query('loads').take(MAX_ROWS)
   },
 })
 
@@ -14,7 +19,7 @@ export const getByStatus = query({
     return await ctx.db
       .query('loads')
       .withIndex('by_status', (q) => q.eq('status', args.status))
-      .collect()
+      .take(MAX_ROWS)
   },
 })
 
@@ -38,7 +43,7 @@ export const search = query({
     let results = await ctx.db
       .query('loads')
       .withIndex('by_status', (q) => q.eq('status', 'available'))
-      .collect()
+      .take(MAX_ROWS)
 
     if (args.origin) {
       const originLower = args.origin.toLowerCase()

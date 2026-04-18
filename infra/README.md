@@ -4,6 +4,9 @@ This project deploys to a [Hostinger](https://www.hostinger.com/) VPS running [D
 
 See [../docs/dokploy-setup.md](../docs/dokploy-setup.md) for the full step-by-step setup of the API and Dashboard applications.
 
+For running the stack on a developer laptop (Redis + optional SigNoz),
+see [dev/README.md](./dev/README.md).
+
 ## At a glance
 
 - Provider: Hostinger VPS (Ubuntu 22.04+ recommended)

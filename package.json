@@ -5,6 +5,9 @@
   "scripts": {
     "build": "turbo run build",
     "dev": "turbo run dev",
+    "dev:all": "docker compose -f docker-compose.dev.yml up --build",
+    "dev:all:down": "docker compose -f docker-compose.dev.yml down",
+    "dev:all:logs": "docker compose -f docker-compose.dev.yml logs -f api dashboard",
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
@@ -29,9 +32,7 @@
     "typescript": "^5.7.0"
   },
   "lint-staged": {
-    "*.{ts,tsx,js,jsx,json}": [
-      "biome check --write --no-errors-on-unmatched"
-    ]
+    "*.{ts,tsx,js,jsx,json}": ["biome check --write --no-errors-on-unmatched"]
   },
   "pnpm": {
     "overrides": {
