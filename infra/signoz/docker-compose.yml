@@ -66,12 +66,19 @@ services:
     volumes:
       - clickhouse-user-scripts:/var/lib/clickhouse/user_scripts
 
-  # Service name must match SigNoz upstream's ClickHouse `cluster.xml`,
-  # which hardcodes the zookeeper host as `zookeeper-1`. Renaming this
-  # service avoids noisy `Host not found: zookeeper-1` DDLWorker errors
-  # in the ClickHouse logs.
+  # SigNoz upstream's ClickHouse `cluster.xml` hardcodes the zookeeper host
+  # as `zookeeper-1`. The service name carries that literal, but Docker
+  # Compose skips the service-name DNS alias when the name ends in `-N`
+  # (it treats `-1` as the scale-index suffix), so ClickHouse fails to
+  # resolve `zookeeper-1` and DDL / migrations crash-loop. We force the
+  # alias explicitly on `signoz-net`, which also overrides the list-form
+  # `networks: [signoz-net]` merged in from *common.
   zookeeper-1:
     <<: *common
+    networks:
+      signoz-net:
+        aliases:
+          - zookeeper-1
     image: signoz/zookeeper:3.7.1
     container_name: signoz-zookeeper
     user: root
