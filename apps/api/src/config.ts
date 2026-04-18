@@ -55,7 +55,7 @@ const EnvSchema = z.object({
 
   // Observability
   OTEL_ENABLED: optionalStringWithDefault('true'),
-  OTEL_EXPORTER_OTLP_ENDPOINT: optionalStringWithDefault('http://signoz-otel-collector:4317'),
+  OTEL_EXPORTER_OTLP_ENDPOINT: optionalStringWithDefault('http://signoz-otel-collector:4318'),
   OTEL_SERVICE_NAME: optionalStringWithDefault('carrier-sales-api'),
   SERVICE_VERSION: optionalStringWithDefault('1.0.0'),
   SERVICE_NAMESPACE: optionalStringWithDefault('development'),

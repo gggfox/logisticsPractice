@@ -33,11 +33,13 @@ services:
     container_name: carrier-sales-dev-api
     env_file: .env
     # Compose `environment:` takes precedence over env_file, so host
-    # values in .env (redis://localhost:6379, http://localhost:4317)
+    # values in .env (redis://localhost:6379, http://localhost:4318)
     # get correctly overridden to the container-internal DNS names.
+    # Port 4318 is OTLP-HTTP; the API exports via HTTP (see
+    # apps/api/src/otel.ts). 4317 is gRPC and is NOT used.
     environment:
       REDIS_URL: redis://redis:6379
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://signoz-otel-collector:4317
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://signoz-otel-collector:4318
       CHOKIDAR_USEPOLLING: "true"
       CHOKIDAR_INTERVAL: "500"
     ports:

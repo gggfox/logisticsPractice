@@ -9,7 +9,10 @@
 # it cannot reach container-internal DNS. This overlay publishes the
 # collector's OTLP gRPC (4317) and HTTP (4318) ports on localhost so
 # the API can export with:
-#   OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+#   OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+# (4318 is the HTTP port the API exporter expects; see apps/api/src/otel.ts.
+# 4317 is published only because the base compose declared it; the API
+# does NOT use gRPC.)
 #
 # Usage:
 #   docker compose \

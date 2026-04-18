@@ -25,22 +25,36 @@ export const CarrierVerificationResponseSchema = z.object({
 
 export type CarrierVerificationResponse = z.infer<typeof CarrierVerificationResponseSchema>
 
+// FMCSA's live API is inconsistent about types: numeric IDs arrive as
+// `number` for large carriers and `string` for smaller ones; optional string
+// fields come back as `null` (not absent) when unrated/unknown. Model both
+// shapes here so consumers get clean `string | undefined` after parsing.
+const fmcsaNullishString = z
+  .string()
+  .nullish()
+  .transform((v) => v ?? undefined)
+
+const fmcsaNullishNumber = z
+  .number()
+  .nullish()
+  .transform((v) => v ?? undefined)
+
 export const FMCSACarrierResponseSchema = z.object({
   content: z.object({
     carrier: z.object({
       legalName: z.string(),
-      dotNumber: z.string(),
-      mcNumber: z.string().optional(),
+      dotNumber: z.union([z.string(), z.number()]).transform(String),
+      mcNumber: fmcsaNullishString,
       allowedToOperate: z.string(),
-      bipdInsuranceOnFile: z.string().optional(),
-      bipdInsuranceRequired: z.string().optional(),
-      bondInsuranceOnFile: z.string().optional(),
-      safetyRating: z.string().optional(),
-      totalDrivers: z.number().optional(),
-      totalPowerUnits: z.number().optional(),
-      phone: z.string().optional(),
+      bipdInsuranceOnFile: fmcsaNullishString,
+      bipdInsuranceRequired: fmcsaNullishString,
+      bondInsuranceOnFile: fmcsaNullishString,
+      safetyRating: fmcsaNullishString,
+      totalDrivers: fmcsaNullishNumber,
+      totalPowerUnits: fmcsaNullishNumber,
+      phone: fmcsaNullishString,
       statusCode: z.string(),
-      oosDate: z.string().optional(),
+      oosDate: fmcsaNullishString,
     }),
   }),
 })

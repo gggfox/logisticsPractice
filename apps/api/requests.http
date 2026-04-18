@@ -11,12 +11,23 @@
 @baseUrl = http://localhost:3111
 @apiKey = {{$dotenv BRIDGE_API_KEY}}
 @adminKey = {{$dotenv ADMIN_API_KEY}}
+@fmcsaWebKey = {{$dotenv FMCSA_WEB_KEY}}
 # @apiKey = your_bridge_api_key
 # @adminKey = your_admin_api_key
 
 @loadId = LOAD-1000
 @mcNumber = 123456
 @callId = call-demo-001
+
+# Real FMCSA identifiers for examples below.
+# Look up more at https://safer.fmcsa.dot.gov/CompanySnapshot.aspx
+# NOTE: our local /api/v1/carriers/:mc route proxies to FMCSA's
+# /qc/services/carriers/{id} endpoint, which FMCSA treats as a *DOT*
+# number -- not an MC docket. Use the DOT values below with our API;
+# use the MC values only with the direct MC-docket endpoint further down.
+@dotSchneider = 264184
+@dotSwift     = 54283
+@mcSchneider  = 44110
 
 ###
 # @name health
@@ -50,9 +61,12 @@ Accept: application/json
 
 ###
 # @name getFirstLoadFromSearch
-# Chained example: fetch the first load_id returned by `searchLoads`.
-# Run `searchLoads` first so REST Client has a cached response.
-GET {{baseUrl}}/api/v1/loads/{{searchLoads.response.body.loads[0].load_id}}
+# Chained example: fetch the first load_id returned by `searchLoadsAll`.
+# You MUST click "Send Request" on `searchLoadsAll` above first, in the same
+# editor session, and it must return a non-empty `loads` array. Otherwise the
+# `{{...}}` below is sent literally and the server returns 404.
+# If you see the placeholder in the 404 message, the cache is missing/empty.
+GET {{baseUrl}}/api/v1/loads/{{searchLoadsAll.response.body.$.loads[0].load_id}}
 x-api-key: {{apiKey}}
 Accept: application/json
 
@@ -61,6 +75,43 @@ Accept: application/json
 # Verify a carrier by MC number via FMCSA.
 GET {{baseUrl}}/api/v1/carriers/{{mcNumber}}
 x-api-key: {{apiKey}}
+Accept: application/json
+
+###
+# @name verifyCarrierSchneider
+# Hit our API with a real carrier (Schneider, DOT 264184).
+GET {{baseUrl}}/api/v1/carriers/{{dotSchneider}}
+x-api-key: {{apiKey}}
+Accept: application/json
+
+###
+# @name verifyCarrierSwift
+# Hit our API with a real carrier (Swift Transportation, DOT 54283).
+GET {{baseUrl}}/api/v1/carriers/{{dotSwift}}
+x-api-key: {{apiKey}}
+Accept: application/json
+
+###
+# @name fmcsaByDOT
+# Call FMCSA's QCMobile API directly (bypasses our API + cache). This is
+# the same endpoint our fmcsa.service.ts uses. Useful for comparing cached
+# vs live data, or debugging when our API returns NOT_FOUND.
+GET https://mobile.fmcsa.dot.gov/qc/services/carriers/{{dotSchneider}}?webKey={{fmcsaWebKey}}
+Accept: application/json
+
+###
+# @name fmcsaByMCDocket
+# Direct lookup by MC docket number (different FMCSA endpoint). Use this
+# when you only have an MC# from a carrier over the phone and no DOT#.
+GET https://mobile.fmcsa.dot.gov/qc/services/carriers/docket-number/{{mcSchneider}}?webKey={{fmcsaWebKey}}
+Accept: application/json
+
+###
+# @name fmcsaByName
+# Fuzzy search by legal/DBA name -- returns a list of candidates.
+# URL-encode spaces as %20 (REST Client won't do it for you).
+# Try: SCHNEIDER, SWIFT, KNIGHT%20TRANSPORTATION, J.B.%20HUNT
+GET https://mobile.fmcsa.dot.gov/qc/services/carriers/name/SCHNEIDER?webKey={{fmcsaWebKey}}
 Accept: application/json
 
 ###
