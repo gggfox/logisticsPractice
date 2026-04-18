@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isFmcsaNotFound } from '../fmcsa.service.js'
+import { isFmcsaInvalidIdError, isFmcsaNotFound, normalizeCarrierId } from '../fmcsa.service.js'
 
 /** Mirrors eligibility rules in `fmcsa.service.ts` (not exported from the module). */
 function evaluateEligibility(carrier: {
@@ -90,5 +90,79 @@ describe('isFmcsaNotFound', () => {
     expect(isFmcsaNotFound('content: null')).toBe(false)
     expect(isFmcsaNotFound(0)).toBe(false)
     expect(isFmcsaNotFound(false)).toBe(false)
+  })
+})
+
+describe('normalizeCarrierId', () => {
+  it('accepts a bare numeric identifier', () => {
+    expect(normalizeCarrierId('264184')).toEqual({ kind: 'digits', digits: '264184' })
+  })
+
+  it("strips an 'MC-' prefix", () => {
+    expect(normalizeCarrierId('MC-264184')).toEqual({ kind: 'digits', digits: '264184' })
+  })
+
+  it("strips an 'MC ' (space) prefix", () => {
+    expect(normalizeCarrierId('MC 264184')).toEqual({ kind: 'digits', digits: '264184' })
+  })
+
+  it('handles lowercase mc with no separator', () => {
+    expect(normalizeCarrierId('mc264184')).toEqual({ kind: 'digits', digits: '264184' })
+  })
+
+  it("strips a 'DOT-' prefix", () => {
+    expect(normalizeCarrierId('DOT-54283')).toEqual({ kind: 'digits', digits: '54283' })
+  })
+
+  it('rejects the word unknown as invalid', () => {
+    const result = normalizeCarrierId('unknown')
+    expect(result.kind).toBe('invalid')
+  })
+
+  it('rejects an empty string as invalid', () => {
+    const result = normalizeCarrierId('')
+    expect(result).toEqual({ kind: 'invalid', reason: 'Empty identifier' })
+  })
+
+  it('rejects MC-abc (non-numeric after strip)', () => {
+    const result = normalizeCarrierId('MC-abc')
+    expect(result.kind).toBe('invalid')
+  })
+
+  it('rejects whitespace-only input as invalid', () => {
+    const result = normalizeCarrierId('   ')
+    expect(result).toEqual({ kind: 'invalid', reason: 'Empty identifier' })
+  })
+})
+
+describe('isFmcsaInvalidIdError', () => {
+  it('returns true for the stringified FMCSA error-id body', () => {
+    expect(
+      isFmcsaInvalidIdError({
+        content: 'We encountered an error while processing your request. Error ID: 99E6451A',
+      }),
+    ).toBe(true)
+  })
+
+  it('returns false for a populated content object', () => {
+    expect(
+      isFmcsaInvalidIdError({
+        content: { carrier: { legalName: 'Schneider National Carriers Inc' } },
+      }),
+    ).toBe(false)
+  })
+
+  it('returns false for { content: null }', () => {
+    expect(isFmcsaInvalidIdError({ content: null })).toBe(false)
+  })
+
+  it('returns false for a string without the Error ID marker', () => {
+    expect(isFmcsaInvalidIdError({ content: 'Some other string' })).toBe(false)
+  })
+
+  it('returns false for null, undefined, and primitives', () => {
+    expect(isFmcsaInvalidIdError(null)).toBe(false)
+    expect(isFmcsaInvalidIdError(undefined)).toBe(false)
+    expect(isFmcsaInvalidIdError('Error ID: 123')).toBe(false)
   })
 })

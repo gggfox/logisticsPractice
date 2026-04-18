@@ -5,7 +5,7 @@ import { z } from 'zod'
 import { carrierVerificationCounter } from '../../observability/metrics.js'
 import { enrichWideEvent } from '../../observability/wide-event-store.js'
 import { getVerifyCarrierQueue } from '../../queues/index.js'
-import { verifyCarrier } from '../../services/fmcsa.service.js'
+import { normalizeCarrierId, verifyCarrier } from '../../services/fmcsa.service.js'
 import { ErrorBodySchema } from '../_error-schema.js'
 
 const ParamsSchema = z.object({
@@ -32,8 +32,26 @@ const findCarrierRoute: FastifyPluginAsync = async (app) => {
       const { mc_number } = req.params
       enrichWideEvent(req, { mc_number })
 
+      const normalized = normalizeCarrierId(mc_number)
+      if (normalized.kind === 'invalid') {
+        enrichWideEvent(req, {
+          normalize_result: 'invalid',
+          reason: normalized.reason,
+          eligible: false,
+          operating_status: 'NOT_FOUND',
+        })
+        carrierVerificationCounter.add(1, { eligible: 'false', outcome: 'invalid_input' })
+        return {
+          mc_number,
+          legal_name: 'Unknown',
+          is_eligible: false,
+          operating_status: 'NOT_FOUND',
+          reason: 'Invalid carrier identifier',
+        }
+      }
+
       try {
-        const result = await verifyCarrier(mc_number)
+        const result = await verifyCarrier(normalized.digits)
 
         enrichWideEvent(req, {
           eligible: result.is_eligible,

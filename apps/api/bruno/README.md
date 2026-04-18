@@ -26,21 +26,34 @@ From the repo root:
 pnpm --filter @carrier-sales/api dev   # http://localhost:3111
 ```
 
+## Environments
+
+Two environments ship with the collection. Switch between them with the top-right dropdown in the GUI, or with `--env <name>` on the CLI.
+
+| Env | `baseUrl` | When to use |
+| --- | --- | --- |
+| `local` | `http://localhost:3111` | API running via `pnpm --filter @carrier-sales/api dev` |
+| `prod` | `https://api.gggfox.com` | Deployed Dokploy instance |
+
+Non-secret vars (`baseUrl`, `loadId`, `mcNumber`, `callId`, `dotSchneider`, `dotSwift`, `mcSchneider`) are pre-populated in [`environments/local.bru`](environments/local.bru) and [`environments/prod.bru`](environments/prod.bru).
+
+Secret vars (`apiKey`, `adminKey`, `fmcsaWebKey`) are **per-environment** in Bruno - paste them once for each env and Bruno stores them locally (not on disk, not in git).
+
 ## Open in the GUI
 
 1. Launch Bruno.
 2. `Collection -> Open Collection` and pick `apps/api/bruno`.
-3. Select the `local` environment (top-right dropdown).
-4. Click the environment's edit icon and paste values for the three secret vars (one-time; Bruno stores them locally, not on disk):
-   - `apiKey` - value of `BRIDGE_API_KEY` from `.env`
-   - `adminKey` - value of `ADMIN_API_KEY` from `.env`
-   - `fmcsaWebKey` - value of `FMCSA_WEB_KEY` from `.env`
-
-Non-secret vars (`baseUrl`, `loadId`, `mcNumber`, `callId`, `dotSchneider`, `dotSwift`, `mcSchneider`) are pre-populated in [`environments/local.bru`](environments/local.bru).
+3. Pick the environment you want in the top-right dropdown.
+4. Click the environment's edit icon and paste secret values:
+   - For `local`: `apiKey` = `BRIDGE_API_KEY` from root `.env`, `adminKey` = `ADMIN_API_KEY`, `fmcsaWebKey` = `FMCSA_WEB_KEY`.
+   - For `prod`: the same three var names, but paste the **production** values (from Dokploy's env, not your local `.env`).
+5. Flip the dropdown between `local` and `prod` to re-run the same request against either target.
 
 ## Run from the CLI
 
 From this directory (`apps/api/bruno`):
+
+Local:
 
 ```sh
 set -a && source ../../../.env && set +a
@@ -50,11 +63,22 @@ bru run --env local \
   --env-var fmcsaWebKey=$FMCSA_WEB_KEY
 ```
 
-Run a single folder or file:
+Prod (pull the secrets from wherever you keep the prod values - e.g. a local `.env.prod` or your password manager; never commit them):
+
+```sh
+set -a && source ../../../.env.prod && set +a
+bru run --env prod \
+  --env-var apiKey=$BRIDGE_API_KEY \
+  --env-var adminKey=$ADMIN_API_KEY \
+  --env-var fmcsaWebKey=$FMCSA_WEB_KEY
+```
+
+Run a single folder or file against either env:
 
 ```sh
 bru run Health --env local
-bru run Loads/get-load.bru --env local --env-var apiKey=$BRIDGE_API_KEY
+bru run Health --env prod
+bru run Loads/get-load.bru --env prod --env-var apiKey=$BRIDGE_API_KEY
 ```
 
 ## Chained request

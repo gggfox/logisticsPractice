@@ -11,12 +11,24 @@ async function happyrobotFetch(path: string, options: RequestInit = {}): Promise
     signal: AbortSignal.timeout(15_000),
   })
 
-  if (response.status === 404) {
+  // Not-found signals: 400 (bad id), 404 (missing), 422 (unprocessable id).
+  // 401/403/429/5xx stay as throws -- those are our problems, not "call not found".
+  if (response.status === 400 || response.status === 404 || response.status === 422) {
     return null
   }
 
   if (!response.ok) {
-    throw new Error(`HappyRobot API error ${response.status}: ${response.statusText}`)
+    // Capture a bounded body snippet for diagnostics so the next failure
+    // surfaces the actual upstream shape. Path has no secrets in it; the
+    // Authorization header is only on the request, never the response.
+    let snippet = ''
+    try {
+      snippet = (await response.text()).slice(0, 200)
+    } catch {
+      // body already consumed or unreadable; keep snippet empty
+    }
+    const suffix = snippet ? ` -- ${snippet}` : ''
+    throw new Error(`HappyRobot API error ${response.status}: ${response.statusText}${suffix}`)
   }
 
   return response.json()
