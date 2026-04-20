@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
   extractSpeakersFromPayload,
+  isTerminalStatus,
   pickSpeakers,
   resolveTranscript,
+  unwrapCloudEventPayload,
 } from '../normalize-call-payload.js'
 
 describe('pickSpeakers', () => {
@@ -128,5 +130,92 @@ describe('resolveTranscript', () => {
   it('treats an empty raw.transcript string as absent', () => {
     const t = resolveTranscript({ transcript: '' }, [{ role: 'agent', text: 'Hi' }])
     expect(t).toBe('agent: Hi')
+  })
+})
+
+describe('unwrapCloudEventPayload', () => {
+  it('unwraps a HappyRobot session.status_changed envelope', () => {
+    const raw = {
+      specversion: '1.0',
+      id: 'evt-123',
+      source: 'https://platform.happyrobot.ai',
+      type: 'session.status_changed',
+      time: '2026-04-20T02:34:49.485Z',
+      datacontenttype: 'application/json',
+      data: {
+        schema_version: '2024-10-01',
+        run_id: 'run-uuid',
+        session_id: 'jd7day0t03gks4kasqj0vzkyy5852bbt',
+        status: {
+          previous: 'in-progress',
+          current: 'completed',
+          updated_at: '2026-04-20T02:34:49.000Z',
+        },
+      },
+    }
+    const out = unwrapCloudEventPayload(raw)
+    expect(out.is_cloud_event).toBe(true)
+    expect(out.cloudevent_type).toBe('session.status_changed')
+    expect(out.event_time).toBe('2026-04-20T02:34:49.485Z')
+    expect(out.session_id).toBe('jd7day0t03gks4kasqj0vzkyy5852bbt')
+    expect(out.run_id).toBe('run-uuid')
+    expect(out.status_current).toBe('completed')
+    expect(out.status_previous).toBe('in-progress')
+    expect(out.status_updated_at).toBe('2026-04-20T02:34:49.000Z')
+    expect(out.inner).toBe(raw.data)
+  })
+
+  it('passes through the flat shape unchanged', () => {
+    const raw = {
+      call_id: 'call-abc',
+      carrier_mc: '264184',
+      status: 'completed',
+      transcript: 'agent: hi',
+    }
+    const out = unwrapCloudEventPayload(raw)
+    expect(out.is_cloud_event).toBe(false)
+    expect(out.inner).toBe(raw)
+    expect(out.cloudevent_type).toBeUndefined()
+    expect(out.session_id).toBeUndefined()
+    expect(out.run_id).toBeUndefined()
+    expect(out.status_current).toBe('completed')
+  })
+
+  it('does not unwrap when data is not an object', () => {
+    const raw = { specversion: '1.0', data: 'not-an-object' }
+    const out = unwrapCloudEventPayload(raw)
+    expect(out.is_cloud_event).toBe(false)
+    expect(out.inner).toBe(raw)
+  })
+
+  it('does not unwrap when specversion is missing', () => {
+    const raw = { data: { session_id: 'x' } }
+    const out = unwrapCloudEventPayload(raw)
+    expect(out.is_cloud_event).toBe(false)
+    expect(out.inner).toBe(raw)
+  })
+
+  it('handles a flat `status` string on the inner payload', () => {
+    const raw = { call_id: 'x', status: 'in-progress' }
+    const out = unwrapCloudEventPayload(raw)
+    expect(out.status_current).toBe('in-progress')
+    expect(out.status_previous).toBeUndefined()
+  })
+})
+
+describe('isTerminalStatus', () => {
+  it.each(['completed', 'failed', 'canceled', 'missed', 'voicemail', 'busy'])(
+    '`%s` is terminal',
+    (status) => {
+      expect(isTerminalStatus(status)).toBe(true)
+    },
+  )
+
+  it.each(['queued', 'in-progress'])('`%s` is non-terminal', (status) => {
+    expect(isTerminalStatus(status)).toBe(false)
+  })
+
+  it('treats `undefined` as terminal so flat-shape payloads still flow', () => {
+    expect(isTerminalStatus(undefined)).toBe(true)
   })
 })

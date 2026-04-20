@@ -1,21 +1,119 @@
 /**
  * Pure normalization of HappyRobot's workflow-completed webhook body.
  *
- * HappyRobot exposes call data through a mix of our documented fields
- * (when the user wires them into the workflow UI) and their native
- * envelope (`run_id`, `session_id`, `variables`, `extraction`, ...).
- * Speaker turns in particular show up under several keys depending on
- * the workflow template -- `raw.speakers`, `raw.messages`,
- * `raw.transcript.speakers`, `extraction.speakers`, etc. -- and
- * individual turns use either `{role, text}` or `{speaker, content}`.
+ * HappyRobot posts a CloudEvents 1.0 envelope (`session.status_changed`)
+ * whose real payload lives under `data`:
  *
- * Consolidating into a single canonical shape here lets the route stay
- * flat and the unit tests stay honest.
+ *   { specversion, id, source, type, time, datacontenttype,
+ *     data: { run_id, session_id, status: { previous, current,
+ *       updated_at }, org, use_case, ... } }
+ *
+ * The UI has no event-type selector and no custom-body option, so the
+ * envelope shape is fixed and the `data` object does NOT carry the
+ * transcript, tool variables, or extraction. Correlation back to the
+ * tool calls hitting `/api/v1/offers` flows through `data.session_id`
+ * -- the `negotiate_offer` tool templates `call_id: @session_id`.
+ *
+ * We still honor the older flat shape (`raw.call_id`, `raw.transcript`,
+ * `raw.speakers`, ...) as a compatibility path in tests and in case a
+ * future HR workflow is wired with an explicit body template.
  */
 
 export interface SpeakerTurn {
   role: string
   text: string
+}
+
+export interface UnwrappedCallEvent {
+  /**
+   * The payload the rest of the normalizer should read. `raw.data`
+   * when a CloudEvents envelope is detected, otherwise `raw` itself.
+   */
+  inner: Record<string, unknown>
+  /** `true` when `raw.specversion` + object `raw.data` were present. */
+  is_cloud_event: boolean
+  /** `raw.type` -- e.g. `"session.status_changed"`. */
+  cloudevent_type: string | undefined
+  /** `raw.time` if present -- the envelope emission time. */
+  event_time: string | undefined
+  /** `data.status.current` -- e.g. `"completed"`, `"in-progress"`. */
+  status_current: string | undefined
+  /** `data.status.previous`. */
+  status_previous: string | undefined
+  /** `data.status.updated_at`. */
+  status_updated_at: string | undefined
+  /** `data.session_id` -- correlation key with `/api/v1/offers`. */
+  session_id: string | undefined
+  /** `data.run_id`. */
+  run_id: string | undefined
+}
+
+/**
+ * HappyRobot session lifecycle statuses from their public docs. Only
+ * the terminal ones should advance pipeline state -- `queued` and
+ * `in-progress` fire a webhook per transition but do not represent a
+ * finished call.
+ */
+const TERMINAL_STATUSES = new Set([
+  'completed',
+  'failed',
+  'canceled',
+  'missed',
+  'voicemail',
+  'busy',
+])
+
+/**
+ * `true` when `status_current` should advance downstream workers.
+ * Non-terminal statuses (`queued`, `in-progress`) are acked but skipped.
+ * For payloads without any status field (older flat shape) we return
+ * `true` so we never regress that path.
+ */
+export function isTerminalStatus(status_current: string | undefined): boolean {
+  if (status_current === undefined) return true
+  return TERMINAL_STATUSES.has(status_current)
+}
+
+function pickString(obj: Record<string, unknown>, key: string): string | undefined {
+  const v = obj[key]
+  return typeof v === 'string' && v.length > 0 ? v : undefined
+}
+
+function asObject(v: unknown): Record<string, unknown> | undefined {
+  if (v === null || typeof v !== 'object' || Array.isArray(v)) return undefined
+  return v as Record<string, unknown>
+}
+
+/**
+ * Detect a CloudEvents 1.0 envelope and return the `data` payload
+ * alongside extracted envelope/status metadata. For non-CloudEvents
+ * bodies `inner` is the caller's `raw` and `is_cloud_event` is `false`.
+ */
+export function unwrapCloudEventPayload(raw: Record<string, unknown>): UnwrappedCallEvent {
+  const specversion = pickString(raw, 'specversion')
+  const data = asObject(raw.data)
+  const is_cloud_event = specversion !== undefined && data !== undefined
+
+  const inner = is_cloud_event && data ? data : raw
+
+  const statusField = asObject(inner.status)
+  const status_current = statusField
+    ? pickString(statusField, 'current')
+    : pickString(inner, 'status')
+  const status_previous = statusField ? pickString(statusField, 'previous') : undefined
+  const status_updated_at = statusField ? pickString(statusField, 'updated_at') : undefined
+
+  return {
+    inner,
+    is_cloud_event,
+    cloudevent_type: pickString(raw, 'type'),
+    event_time: pickString(raw, 'time'),
+    status_current,
+    status_previous,
+    status_updated_at,
+    session_id: pickString(inner, 'session_id'),
+    run_id: pickString(inner, 'run_id'),
+  }
 }
 
 function firstNonEmptyString(

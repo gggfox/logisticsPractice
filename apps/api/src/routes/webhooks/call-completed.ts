@@ -7,7 +7,12 @@ import { enrichWideEvent } from '../../observability/wide-event-store.js'
 import { verifyWebhookSignature } from '../../plugins/hmac.js'
 import { getAnalyzeSentimentQueue, getClassifyCallQueue } from '../../queues/index.js'
 import { ErrorBodySchema } from '../_error-schema.js'
-import { extractSpeakersFromPayload, resolveTranscript } from './normalize-call-payload.js'
+import {
+  extractSpeakersFromPayload,
+  isTerminalStatus,
+  resolveTranscript,
+  unwrapCloudEventPayload,
+} from './normalize-call-payload.js'
 
 const WebhookAckSchema = z.object({ received: z.literal(true) })
 
@@ -42,12 +47,12 @@ const callCompletedRoute: FastifyPluginAsync = async (app) => {
       }
       enrichWideEvent(req, { signature_state: signatureState })
 
-      // HappyRobot's workflow-completed webhook body is a mix of our
-      // documented fields (when the user wires them) and their native
-      // envelope (run_id/session_id/variables/extraction/...). Normalize
-      // here so the rest of the pipeline -- Convex mutations,
-      // classify/sentiment workers -- sees a single canonical shape.
+      // HappyRobot posts a CloudEvents 1.0 envelope whose real payload
+      // is under `data` (see normalize-call-payload.ts). Unwrap first
+      // so the rest of the pipeline sees a single canonical shape.
       const raw = req.body as Record<string, unknown>
+      const envelope = unwrapCloudEventPayload(raw)
+      const inner = envelope.inner
       const pickString = (...values: unknown[]): string | undefined => {
         for (const v of values) {
           if (typeof v === 'string' && v.length > 0) return v
@@ -60,45 +65,75 @@ const callCompletedRoute: FastifyPluginAsync = async (app) => {
         }
         return undefined
       }
-      const vars = (raw.variables ?? {}) as Record<string, unknown>
-      const speakers = extractSpeakersFromPayload(raw)
-      const transcript = resolveTranscript(raw, speakers)
+      const vars = (inner.variables ?? {}) as Record<string, unknown>
+      const speakers = extractSpeakersFromPayload(inner)
+      const transcript = resolveTranscript(inner, speakers)
 
+      // `negotiate_offer` in HappyRobot templates `call_id: @session_id`,
+      // so prefer the envelope's `session_id` to correlate the webhook
+      // with the offer rows already written to Convex.
       const call_id =
-        pickString(raw.call_id, raw.run_id, raw.session_id, vars.session_id, vars.call_id) ??
+        envelope.session_id ??
+        envelope.run_id ??
+        pickString(inner.call_id, vars.session_id, vars.call_id) ??
         'unknown'
-      const status = pickString(raw.status) ?? 'completed'
-      const carrier_mc = pickString(raw.carrier_mc, vars.carrier_mc, vars.mc_number)
-      const load_id = pickString(raw.load_id, vars.load_id, vars.reference_number)
-      const duration_seconds = pickNumber(raw.duration_seconds)
-      const phone_number = pickString(raw.phone_number, vars.phone_number)
-      // Convex requires `started_at: string`; default to now so a
-      // timestamp-less envelope doesn't block insert.
-      const started_at = pickString(raw.started_at) ?? new Date().toISOString()
-      const ended_at = pickString(raw.ended_at)
+      const status = envelope.status_current ?? pickString(inner.status) ?? 'completed'
+      const carrier_mc = pickString(inner.carrier_mc, vars.carrier_mc, vars.mc_number)
+      const load_id = pickString(inner.load_id, vars.load_id, vars.reference_number)
+      const duration_seconds = pickNumber(inner.duration_seconds)
+      const phone_number = pickString(inner.phone_number, vars.phone_number)
+      // Convex requires `started_at: string`; fall back to the status
+      // transition time, then the envelope emission time, then now.
+      const started_at =
+        pickString(inner.started_at) ??
+        envelope.status_updated_at ??
+        envelope.event_time ??
+        new Date().toISOString()
+      const ended_at = pickString(inner.ended_at) ?? envelope.status_updated_at
       const extracted_data =
-        (raw.extracted_data as Record<string, unknown> | undefined) ??
-        (raw.extraction as Record<string, unknown> | undefined)
+        (inner.extracted_data as Record<string, unknown> | undefined) ??
+        (inner.extraction as Record<string, unknown> | undefined)
+      const is_terminal = isTerminalStatus(envelope.status_current)
 
       enrichWideEvent(req, {
         call_id,
         call_status: status,
+        cloudevent: envelope.is_cloud_event,
+        cloudevent_type: envelope.cloudevent_type,
+        status_current: envelope.status_current,
+        status_previous: envelope.status_previous,
+        is_terminal,
         has_transcript: transcript.length > 0,
         speaker_turns: speakers?.length ?? 0,
         carrier_mc,
         load_id,
         duration_seconds,
         phone_present: Boolean(phone_number),
-        // Diagnostic: which top-level keys the caller actually sent. Low-
-        // cardinality (sender-stable) and leaks no PII.
+        // Diagnostic: top-level keys on both the envelope and the
+        // unwrapped body. Low-cardinality (sender-stable), no PII.
         payload_keys: Object.keys(raw)
           .sort((a, b) => a.localeCompare(b))
           .join(','),
+        data_keys: envelope.is_cloud_event
+          ? Object.keys(inner)
+              .sort((a, b) => a.localeCompare(b))
+              .join(',')
+          : undefined,
       })
       webhookReceivedCounter.add(1, {
         signature_state: signatureState,
         status,
       })
+
+      // `session.status_changed` fires on every transition
+      // (`queued` -> `in-progress` -> `completed`). Only terminal
+      // statuses should advance the downstream pipeline; acking 200
+      // on the rest avoids creating a stream of partial `calls` rows
+      // and tells HappyRobot the delivery succeeded.
+      if (!is_terminal) {
+        enrichWideEvent(req, { enqueued: false, skip_reason: 'non_terminal_status' })
+        return { received: true as const }
+      }
 
       try {
         // Fan-out: BullMQ workers sharing a queue name compete, so publish

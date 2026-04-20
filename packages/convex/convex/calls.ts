@@ -102,6 +102,73 @@ export const updateOutcome = mutation({
   },
 })
 
+// Partial upsert from the `/api/v1/offers` bridge. HappyRobot's
+// `session.status_changed` webhook does NOT carry transcript, carrier,
+// load, or extraction data -- only session lifecycle. The offer route
+// IS the authoritative source for those fields during an active call,
+// and it fires before the `completed` webhook. Write a row early so
+// the dashboard shows carrier/load/rate/rounds immediately, and never
+// regress fields the classify or sentiment worker has already set.
+export const upsertFromOffer = mutation({
+  args: {
+    call_id: v.string(),
+    carrier_mc: v.optional(v.string()),
+    load_id: v.optional(v.string()),
+    negotiation_rounds: v.optional(v.number()),
+    final_rate: v.optional(v.number()),
+    outcome: v.optional(v.string()),
+    started_at: v.optional(v.string()),
+    ended_at: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query('calls')
+      .withIndex('by_call_id', (q) => q.eq('call_id', args.call_id))
+      .first()
+
+    if (!existing) {
+      await ctx.db.insert('calls', {
+        call_id: args.call_id,
+        carrier_mc: args.carrier_mc ?? 'unknown',
+        load_id: args.load_id,
+        transcript: '',
+        negotiation_rounds: args.negotiation_rounds ?? 0,
+        final_rate: args.final_rate,
+        outcome: args.outcome,
+        started_at: args.started_at ?? new Date().toISOString(),
+        ended_at: args.ended_at,
+      })
+      return
+    }
+
+    const patch: Record<string, unknown> = {}
+    // Only upgrade `carrier_mc` -- never overwrite a concrete MC with
+    // `'unknown'` from a later unrelated offer row.
+    if (args.carrier_mc !== undefined && args.carrier_mc !== 'unknown') {
+      patch.carrier_mc = args.carrier_mc
+    }
+    if (args.load_id !== undefined) patch.load_id = args.load_id
+    if (args.negotiation_rounds !== undefined) {
+      // Take the max so late-arriving round 1 can't rewrite round 3.
+      patch.negotiation_rounds = Math.max(existing.negotiation_rounds ?? 0, args.negotiation_rounds)
+    }
+    if (args.final_rate !== undefined) patch.final_rate = args.final_rate
+    // Do not overwrite a concrete outcome (e.g. `booked`) with a
+    // transient one from a mid-negotiation offer.
+    if (args.outcome !== undefined && existing.outcome === undefined) {
+      patch.outcome = args.outcome
+    }
+    if (args.started_at !== undefined && existing.started_at === undefined) {
+      patch.started_at = args.started_at
+    }
+    if (args.ended_at !== undefined) patch.ended_at = args.ended_at
+
+    if (Object.keys(patch).length > 0) {
+      await ctx.db.patch(existing._id, patch)
+    }
+  },
+})
+
 // Purpose-built patch so the sentiment worker never clobbers the
 // classify worker's `outcome`. The worker race was the root cause of
 // every recent call showing `declined`.

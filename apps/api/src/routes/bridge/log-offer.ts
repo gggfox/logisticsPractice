@@ -99,13 +99,29 @@ const logOfferRoute: FastifyPluginAsync = async (app) => {
           })
         }
 
+        const now = new Date().toISOString()
         await convexService.negotiations.logRound({
           call_id,
           round,
           offered_rate,
           counter_rate: counterOffer,
           accepted,
-          timestamp: new Date().toISOString(),
+          timestamp: now,
+        })
+
+        // Seed / patch the `calls` row from the authoritative offer
+        // data. HappyRobot's `session.status_changed` webhook does not
+        // carry carrier/load/rate, so if we relied on it alone the
+        // dashboard would show `unknown` until the `completed` event
+        // arrived -- and even then without a final rate. Writing here
+        // keeps the Call History & Live Feed in sync mid-negotiation.
+        await convexService.calls.upsertFromOffer({
+          call_id,
+          carrier_mc,
+          load_id,
+          negotiation_rounds: round,
+          ...(accepted ? { final_rate: offered_rate, outcome: 'booked' } : {}),
+          started_at: now,
         })
 
         enrichWideEvent(req, {

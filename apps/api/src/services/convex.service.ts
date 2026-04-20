@@ -93,6 +93,17 @@ export const convexService = {
 
     updateSentiment: (params: { call_id: string; sentiment: string }) =>
       getClient().mutation(api.calls.updateSentiment, params),
+
+    upsertFromOffer: (params: {
+      call_id: string
+      carrier_mc?: string
+      load_id?: string
+      negotiation_rounds?: number
+      final_rate?: number
+      outcome?: string
+      started_at?: string
+      ended_at?: string
+    }) => getClient().mutation(api.calls.upsertFromOffer, params),
   },
 
   negotiations: {
