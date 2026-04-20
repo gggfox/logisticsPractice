@@ -37,7 +37,7 @@ const bookLoadRoute: FastifyPluginAsync = async (app) => {
     },
     async (req, reply) => {
       const { load_id } = req.params
-      const { agreed_rate } = req.body
+      const { agreed_rate, carrier_mc } = req.body
       const headerValue = req.headers[HR_SESSION_HEADER]
 
       // Same resolution rules as `/api/v1/offers`: header always wins over
@@ -49,6 +49,7 @@ const bookLoadRoute: FastifyPluginAsync = async (app) => {
       enrichWideEvent(req, {
         load_id,
         agreed_rate,
+        carrier_mc,
         call_id_source: resolved.source,
       })
 
@@ -126,17 +127,19 @@ const bookLoadRoute: FastifyPluginAsync = async (app) => {
         const now = new Date().toISOString()
         await convexService.loads.updateStatus(load_id, 'booked')
 
-        // Patch the `calls` row -- the load-offer route has been seeding
-        // it round-by-round, so this just flips `outcome` to 'booked' and
-        // stamps the final agreed rate. Worst case this is the first
-        // write (caller jumped straight to `book_load` without going
-        // through `negotiate_offer`); `upsertFromOffer` handles either.
-        await convexService.calls.upsertFromOffer({
+        // Authoritative booking write: forces `outcome: 'booked'` along
+        // with `carrier_mc` / `load_id` / `final_rate` so the call row
+        // can never show a booked load with `carrier_mc: 'unknown'` or
+        // an earlier classify-written `dropped`. `upsertFromOffer` would
+        // silently keep the older outcome; `markBooked` is purpose-built
+        // to close that hole.
+        await convexService.calls.markBooked({
           call_id,
           load_id,
+          carrier_mc,
           final_rate: agreed_rate,
-          outcome: 'booked',
           started_at: now,
+          ended_at: now,
         })
 
         bookingOutcomeCounter.add(1, { result: 'accepted_after_max_rounds' })

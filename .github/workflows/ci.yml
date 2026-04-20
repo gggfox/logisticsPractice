@@ -131,3 +131,29 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+
+  deploy-convex:
+    name: Deploy Convex
+    # Only deploy on push to main, after every other gate passes. This
+    # closes the drift window between the API (auto-deployed by Dokploy
+    # on push) and Convex functions (previously manual) that caused
+    # post-schema-change webhooks to fail with `ArgumentValidationError`
+    # and silently drop a call row.
+    needs: [lint, typecheck, test-unit, build]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    concurrency:
+      group: deploy-convex-prod
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -F @carrier-sales/convex deploy -- --yes
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}

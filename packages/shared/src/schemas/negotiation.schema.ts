@@ -37,13 +37,25 @@ export const OfferResponseSchema = z.object({
 
 export type OfferResponse = z.infer<typeof OfferResponseSchema>
 
-// Booking confirmation. Used by the `book_load` HR tool after the caller
-// accepts a counter that came back from `negotiate_offer` with
-// `max_rounds_reached: true` -- the negotiation round ledger is already
-// final, this endpoint just flips `loads.status -> 'booked'` and seeds
-// the `calls` row with the agreed rate.
+// Booking confirmation. Used by the `book_load` HR tool (or a downstream
+// sales system after `transfer_to_sales`) once the caller accepts a
+// rate. `carrier_mc` is required because this endpoint is the
+// authoritative "the deal closed" event -- if it's missing here, the
+// `calls` row can end up with `carrier_mc: 'unknown'` even though the
+// load just got flipped to `booked`, which is exactly the data-loss
+// mode we are trying to close.
+//
+// We can't use plain `z.coerce.string()` on `carrier_mc`: `String(undefined)`
+// is the literal `"undefined"` and would pass `.min(1)`, silently accepting
+// bookings with no carrier. The union-then-pipe guarantees the caller
+// actually sent a value (HappyRobot's `negotiate_offer` webhook ships
+// carrier_mc as an unquoted JSON number, so both shapes must be accepted).
 export const BookLoadRequestSchema = z.object({
   agreed_rate: z.coerce.number().positive(),
+  carrier_mc: z
+    .union([z.string(), z.number()])
+    .transform((v) => String(v))
+    .pipe(z.string().min(1)),
 })
 
 export type BookLoadRequest = z.infer<typeof BookLoadRequestSchema>

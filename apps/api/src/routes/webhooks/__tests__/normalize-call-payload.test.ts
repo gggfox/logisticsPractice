@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { normalizeCallEvent } from '../call-completed.js'
 import {
   extractSpeakersFromPayload,
   isTerminalStatus,
@@ -236,5 +237,119 @@ describe('isTerminalStatus', () => {
 
   it('treats `undefined` as terminal so flat-shape payloads still flow', () => {
     expect(isTerminalStatus(undefined)).toBe(true)
+  })
+})
+
+describe('normalizeCallEvent', () => {
+  it('pulls business fields out of the templated per-node webhook body', () => {
+    // This is the body HR delivers from the Webhook node fired after
+    // `AI Extract` (see docs/happyrobot-setup.md §9.1).
+    const raw = {
+      call_id: 'sess-abc',
+      run_id: 'run-abc',
+      carrier_mc: '264184',
+      load_id: 'LOAD-1002',
+      phone_number: '+15551234567',
+      status: 'completed',
+      started_at: '2026-04-20T22:00:00.000Z',
+      ended_at: '2026-04-20T22:05:00.000Z',
+      duration_seconds: 300,
+      transcript: 'agent: booked.',
+      extracted_data: {
+        reference_number: 'LOAD-1002',
+        mc_number: '264184',
+        booking_decision: 'yes',
+        final_rate: 2241,
+      },
+      classification: { tag: 'Success' },
+    }
+    const n = normalizeCallEvent(raw)
+    expect(n.call_id).toBe('sess-abc')
+    expect(n.status).toBe('completed')
+    expect(n.carrier_mc).toBe('264184')
+    expect(n.load_id).toBe('LOAD-1002')
+    expect(n.duration_seconds).toBe(300)
+    expect(n.phone_number).toBe('+15551234567')
+    expect(n.booking_decision).toBe('yes')
+    expect(n.final_rate_from_extraction).toBe(2241)
+    expect(n.carrier_mc_valid).toBe(true)
+    expect(n.load_id_plausible).toBe(true)
+    expect(n.is_terminal).toBe(true)
+  })
+
+  it('preserves native CloudEvents envelope shape (no business data)', () => {
+    const raw = {
+      specversion: '1.0',
+      type: 'session.status_changed',
+      time: '2026-04-20T02:34:49.485Z',
+      data: {
+        run_id: 'run-uuid',
+        session_id: 'session-uuid',
+        status: {
+          previous: 'in-progress',
+          current: 'completed',
+          updated_at: '2026-04-20T02:34:49.000Z',
+        },
+      },
+    }
+    const n = normalizeCallEvent(raw)
+    // `session_id` wins over `run_id` for correlation so offer rows line up.
+    expect(n.call_id).toBe('session-uuid')
+    expect(n.carrier_mc).toBeUndefined()
+    expect(n.load_id).toBeUndefined()
+    expect(n.carrier_mc_valid).toBe(true) // no MC present = "not invalid"
+    expect(n.load_id_plausible).toBe(true)
+    expect(n.is_terminal).toBe(true)
+    expect(n.booking_decision).toBeUndefined()
+  })
+
+  it('flags an LLM-invented non-digit carrier_mc as invalid', () => {
+    const raw = {
+      call_id: 'sess-1',
+      carrier_mc: 'my number is 264184', // LLM hallucination
+      load_id: 'LOAD-1002',
+      status: 'completed',
+    }
+    const n = normalizeCallEvent(raw)
+    expect(n.carrier_mc).toBe('my number is 264184')
+    expect(n.carrier_mc_valid).toBe(false)
+    expect(n.load_id_plausible).toBe(true)
+  })
+
+  it('flags an unresolved HR template as an implausible load_id', () => {
+    const raw = {
+      call_id: 'sess-1',
+      carrier_mc: '264184',
+      load_id: '@load_id', // HR template didn't resolve
+      status: 'completed',
+    }
+    const n = normalizeCallEvent(raw)
+    expect(n.load_id).toBe('@load_id')
+    expect(n.load_id_plausible).toBe(false)
+    expect(n.carrier_mc_valid).toBe(true)
+  })
+
+  it('pulls load_id from extracted_data.reference_number when not top-level', () => {
+    const raw = {
+      call_id: 'sess-1',
+      status: 'completed',
+      extracted_data: {
+        reference_number: 'LOAD-1002',
+        booking_decision: 'yes',
+      },
+    }
+    const n = normalizeCallEvent(raw)
+    expect(n.load_id).toBe('LOAD-1002')
+    expect(n.booking_decision).toBe('yes')
+  })
+
+  it('pulls carrier_mc from variables.mc_number (older HR workflows)', () => {
+    const raw = {
+      call_id: 'sess-1',
+      status: 'completed',
+      variables: { mc_number: '264184' },
+    }
+    const n = normalizeCallEvent(raw)
+    expect(n.carrier_mc).toBe('264184')
   })
 })

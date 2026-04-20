@@ -501,6 +501,79 @@ remains permissive (every top-level field is optional) so a future HR
 workflow with a proper body template still flows through without a contract
 change.
 
+### 9.1 Additional per-node Webhook (templated body) — required
+
+Because the workflow-level webhook cannot carry business data and HR's
+`GET /api/v1/runs/:run_id` backfill requires the legacy v1 API key plus
+an `x-organization-id` header (see §11), production calls were landing
+in Convex with `carrier_mc: "unknown"` and `outcome: "dropped"`. Close
+that gap by adding a **second** Webhook node inside the workflow itself,
+immediately after the `AI Extract` core node. This one hits the **same**
+API endpoint but ships a fully-templated body that the server trusts
+over the envelope.
+
+**Add a Webhook core node** with:
+
+| Field        | Value                                                                  |
+|--------------|------------------------------------------------------------------------|
+| Position     | Child of the workflow, connected **after** `AI Extract`                |
+| Method       | `POST`                                                                 |
+| URL          | `{BASE_URL}/api/v1/webhooks/call-completed`                            |
+| Content type | `application/json`                                                     |
+| Headers      | `x-api-key: {BRIDGE_API_KEY}`, `X-Happyrobot-Session-Id: @session_id`  |
+| Body (Raw)   | (see below)                                                            |
+
+Body template (HappyRobot resolves `@variable` refs at delivery time):
+
+```json
+{
+  "call_id": "@session_id",
+  "run_id": "@run_id",
+  "carrier_mc": "@mc_number",
+  "load_id": "@load_id",
+  "phone_number": "@from_number",
+  "status": "completed",
+  "started_at": "@started_at",
+  "ended_at": "@ended_at",
+  "duration_seconds": @duration,
+  "transcript": "@transcript",
+  "extracted_data": {
+    "reference_number": "@extraction.reference_number",
+    "mc_number": "@extraction.mc_number",
+    "booking_decision": "@extraction.booking_decision",
+    "final_rate": "@extraction.final_rate",
+    "decline_reason": "@extraction.decline_reason",
+    "negotiation_rounds": "@extraction.negotiation_rounds"
+  },
+  "classification": {
+    "tag": "@classification.tag"
+  }
+}
+```
+
+**What this buys us:** the server's
+[`call-completed` route](../apps/api/src/routes/webhooks/call-completed.ts)
+pre-decodes `booking_decision` and `final_rate_from_extraction` out of
+`extracted_data` and forwards them to the classify worker. The worker
+then validates:
+
+- `carrier_mc` matches `/^\d{1,8}$/` ([`validation.ts`](../apps/api/src/routes/webhooks/validation.ts));
+- `load_id` resolves to a real row in Convex (`loads.getByLoadId`).
+
+When both pass AND `booking_decision === "yes"` (or HR's Classify tag is
+`Success`), the worker calls `calls.markBooked(...)` and flips
+`loads.status -> "booked"` — the same contract as
+`POST /api/v1/loads/:load_id/book`, but triggered automatically by the
+call-completed pipeline. When validation fails, the call row is still
+written (via the existing `createCallWithFallback` path) but the load is
+left untouched so the load-board never shows a phantom booking.
+
+Because the native envelope webhook and this templated webhook both hit
+the same endpoint, expect **two deliveries per call**. `calls.create` and
+`calls.markBooked` are both upserts keyed on `call_id`, so this is
+idempotent: the second delivery refreshes carrier_mc / load_id / outcome
+with the real values.
+
 ---
 
 ## 10. Testing from the browser (Web call trigger)
@@ -520,10 +593,32 @@ change.
 
 ## 11. Platform API keys
 
-The HappyRobot-side API keys (under **Account and Settings → API Keys**) are used by
-our API to fetch transcripts via `GET /api/v1/calls/:call_id/transcript`. Store the
-value as `HAPPYROBOT_API_KEY` in the deployed environment. Keys are shown **once** at
-creation — rotate by revoking and creating a new one.
+HappyRobot has **two** API key formats and our backfill path is sensitive
+to which one you use. Open **Settings → Profile → Developer Settings**:
+
+- **v2 (default UI):** `sk_live_...` — newer key format. Used by HR's own
+  SDK examples. Does **not** authenticate `GET /api/v1/runs/:run_id` (the
+  endpoint we hit for backfill). Returns `401 Invalid API key or session
+  email`.
+- **v1 (click "Use v1 API instead?"):** 32-char hex string. This is the
+  format our `happyrobot.service.ts` actually authenticates with.
+
+Store the **v1 key** as `HAPPYROBOT_API_KEY` in the deployed environment.
+
+`/api/v1/*` endpoints on `platform.happyrobot.ai` additionally require an
+`x-organization-id` HTTP header. Find your organization id by inspecting
+any authenticated UI request (DevTools → Network → any `/api/internal/*`
+request → Request Headers), or read it from the `org_id` field in the
+runs-API response itself. Store it as `HAPPYROBOT_ORG_ID` (see `.env`).
+
+> **Rollout note (2026-04-20):** the `HAPPYROBOT_API_KEY` stored in
+> Dokploy/`.env` today is the v2 `sk_live_...` key, which is why
+> `hr_run_fetched: false` on every recent Convex `calls` row. The
+> templated per-node webhook in §9.1 is the authoritative data source
+> going forward; switching the API key to the v1 format is a separate
+> follow-up that re-enables the runs-API backfill as a redundancy.
+
+Keys are shown **once** at creation — rotate by revoking and creating a new one.
 
 ---
 
@@ -537,7 +632,9 @@ API-side variables consumed by the flows above:
 | `ADMIN_API_KEY`       | `/api/v1/admin/seed` only                              |
 | `WEBHOOK_SECRET`      | Optional. Only used when a caller sends `x-webhook-signature`; decorates telemetry rather than gating the route |
 | `FMCSA_WEB_KEY`       | `fmcsa.service.ts`                                     |
-| `HAPPYROBOT_API_KEY`  | `happyrobot.service.ts` (transcript fetch)             |
+| `HAPPYROBOT_API_KEY`  | `happyrobot.service.ts` (runs / transcript fetch). Must be the **v1** 32-char hex key — the `sk_live_...` v2 key returns 401 against `/api/v1/runs/:id`. See §11. |
+| `HAPPYROBOT_ORG_ID`   | Required on every request to `platform.happyrobot.ai/api/v1/*`. Documented here; wiring into `happyrobot.service.ts` is tracked as a follow-up (see §11 rollout note). |
+| `HAPPYROBOT_BASE_URL` | `platform.happyrobot.ai` (default). Do **not** point at `api.happyrobot.ai` -- that hostname does not resolve. |
 | `CONVEX_URL`          | `convex.service.ts` for loads / negotiations / calls   |
 
 See [`apps/api/src/config.ts`](../apps/api/src/config.ts) for how the API resolves

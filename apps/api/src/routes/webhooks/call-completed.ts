@@ -1,5 +1,5 @@
 import { CallWebhookPayloadSchema } from '@carrier-sales/shared'
-import type { FastifyPluginAsync } from 'fastify'
+import type { FastifyPluginAsync, FastifyRequest } from 'fastify'
 import type { ZodTypeProvider } from 'fastify-type-provider-zod'
 import { z } from 'zod'
 import { webhookReceivedCounter } from '../../observability/metrics.js'
@@ -8,13 +8,233 @@ import { verifyWebhookSignature } from '../../plugins/hmac.js'
 import { getAnalyzeSentimentQueue, getClassifyCallQueue } from '../../queues/index.js'
 import { ErrorBodySchema } from '../_error-schema.js'
 import {
+  type SpeakerTurn,
   extractSpeakersFromPayload,
   isTerminalStatus,
   resolveTranscript,
   unwrapCloudEventPayload,
 } from './normalize-call-payload.js'
+import {
+  extractBookingDecision,
+  extractFinalRate,
+  extractReferenceNumber,
+  isPlausibleLoadId,
+  isValidMcFormat,
+} from './validation.js'
 
 const WebhookAckSchema = z.object({ received: z.literal(true) })
+
+function pickString(...values: unknown[]): string | undefined {
+  for (const v of values) {
+    if (typeof v === 'string' && v.length > 0) return v
+  }
+  return undefined
+}
+
+function pickNumber(...values: unknown[]): number | undefined {
+  for (const v of values) {
+    if (typeof v === 'number' && Number.isFinite(v)) return v
+  }
+  return undefined
+}
+
+interface NormalizedCallEvent {
+  call_id: string
+  status: string
+  carrier_mc: string | undefined
+  load_id: string | undefined
+  duration_seconds: number | undefined
+  phone_number: string | undefined
+  started_at: string
+  ended_at: string | undefined
+  extracted_data: Record<string, unknown> | undefined
+  booking_decision: 'yes' | 'no' | undefined
+  final_rate_from_extraction: number | undefined
+  carrier_mc_valid: boolean
+  load_id_plausible: boolean
+  is_terminal: boolean
+  transcript: string
+  speakers: SpeakerTurn[] | undefined
+  envelope: ReturnType<typeof unwrapCloudEventPayload>
+  vars: Record<string, unknown>
+  raw: Record<string, unknown>
+}
+
+/**
+ * Collapse both shapes HR can ship -- the native CloudEvents envelope and
+ * the templated per-node Webhook body -- into one canonical structure the
+ * handler branches on. Pure so the handler stays under the biome cognitive
+ * complexity cap.
+ *
+ * `carrier_mc` / `load_id` are searched at three nesting levels:
+ *   1. Top-level (the templated Webhook fired after `AI Extract`).
+ *   2. `variables.*` (older HR workflows surfacing tool params as vars).
+ *   3. `extracted_data.*` (AI Extract response under `mc_number` /
+ *      `reference_number`).
+ */
+export function normalizeCallEvent(raw: Record<string, unknown>): NormalizedCallEvent {
+  const envelope = unwrapCloudEventPayload(raw)
+  const inner = envelope.inner
+  const vars = (inner.variables ?? {}) as Record<string, unknown>
+  const speakers = extractSpeakersFromPayload(inner)
+  const transcript = resolveTranscript(inner, speakers)
+
+  // `negotiate_offer` in HappyRobot templates `call_id: @session_id`, so
+  // the call_id we care about is ALWAYS the HR session UUID. It can
+  // arrive as:
+  //   - `envelope.session_id` on a CloudEvents `session.status_changed`
+  //     delivery (the native workflow-level webhook).
+  //   - `inner.call_id` on the flat templated per-node webhook (HR
+  //     resolves `@session_id` into the body's `call_id` field).
+  //
+  // `envelope.run_id` is the RUN uuid, NOT the session uuid -- using it
+  // as the call_id would break correlation with negotiation rows, which
+  // are keyed on session_id. So it only serves as a last-resort fallback
+  // after body-level overrides. `'unknown'` is the sentinel for "no
+  // correlation id at all" and is caught by the route.
+  const call_id =
+    envelope.session_id ??
+    pickString(inner.call_id, vars.session_id, vars.call_id) ??
+    envelope.run_id ??
+    'unknown'
+  const status = envelope.status_current ?? pickString(inner.status) ?? 'completed'
+  const extracted_data =
+    (inner.extracted_data as Record<string, unknown> | undefined) ??
+    (inner.extraction as Record<string, unknown> | undefined)
+
+  const carrier_mc = pickString(
+    inner.carrier_mc,
+    vars.carrier_mc,
+    vars.mc_number,
+    extracted_data?.carrier_mc,
+    extracted_data?.mc_number,
+  )
+  const load_id = pickString(
+    inner.load_id,
+    vars.load_id,
+    vars.reference_number,
+    extractReferenceNumber(extracted_data),
+  )
+  const duration_seconds = pickNumber(inner.duration_seconds)
+  const phone_number = pickString(inner.phone_number, vars.phone_number)
+
+  // Convex requires `started_at: string`; fall back to the status
+  // transition time, then the envelope emission time, then now.
+  const started_at =
+    pickString(inner.started_at) ??
+    envelope.status_updated_at ??
+    envelope.event_time ??
+    new Date().toISOString()
+  const ended_at = pickString(inner.ended_at) ?? envelope.status_updated_at
+
+  return {
+    call_id,
+    status,
+    carrier_mc,
+    load_id,
+    duration_seconds,
+    phone_number,
+    started_at,
+    ended_at,
+    extracted_data,
+    booking_decision: extractBookingDecision(extracted_data),
+    final_rate_from_extraction: extractFinalRate(extracted_data),
+    carrier_mc_valid: carrier_mc === undefined || isValidMcFormat(carrier_mc),
+    load_id_plausible: load_id === undefined || isPlausibleLoadId(load_id),
+    is_terminal: isTerminalStatus(envelope.status_current),
+    transcript,
+    speakers,
+    envelope,
+    vars,
+    raw,
+  }
+}
+
+function resolveSignatureState(req: FastifyRequest): 'valid' | 'invalid' | 'absent' {
+  const hasSignature = typeof req.headers['x-webhook-signature'] === 'string'
+  if (!hasSignature) return 'absent'
+  return verifyWebhookSignature(req) ? 'valid' : 'invalid'
+}
+
+function enrichWebhookEvent(
+  req: FastifyRequest,
+  n: NormalizedCallEvent,
+  signatureState: 'valid' | 'invalid' | 'absent',
+): void {
+  enrichWideEvent(req, {
+    signature_state: signatureState,
+    call_id: n.call_id,
+    call_status: n.status,
+    cloudevent: n.envelope.is_cloud_event,
+    cloudevent_type: n.envelope.cloudevent_type,
+    status_current: n.envelope.status_current,
+    status_previous: n.envelope.status_previous,
+    is_terminal: n.is_terminal,
+    has_transcript: n.transcript.length > 0,
+    speaker_turns: n.speakers?.length ?? 0,
+    carrier_mc: n.carrier_mc,
+    load_id: n.load_id,
+    duration_seconds: n.duration_seconds,
+    phone_present: Boolean(n.phone_number),
+    payload_keys: Object.keys(n.raw)
+      .sort((a, b) => a.localeCompare(b))
+      .join(','),
+    data_keys: n.envelope.is_cloud_event
+      ? Object.keys(n.envelope.inner)
+          .sort((a, b) => a.localeCompare(b))
+          .join(',')
+      : undefined,
+    vars_keys:
+      Object.keys(n.vars)
+        .sort((a, b) => a.localeCompare(b))
+        .join(',') || undefined,
+    has_extracted_data: n.extracted_data !== undefined,
+    booking_decision: n.booking_decision,
+    final_rate_from_extraction: n.final_rate_from_extraction,
+    carrier_mc_valid: n.carrier_mc_valid,
+    load_id_plausible: n.load_id_plausible,
+  })
+}
+
+async function enqueueClassifyJobs(n: NormalizedCallEvent): Promise<void> {
+  // Fan-out: BullMQ workers sharing a queue name compete, so publish
+  // to two topics (classify + sentiment) for parallel processing. The
+  // classify job is delayed 3s so the first attempt doesn't race
+  // HappyRobot's Extract node -- HR's extraction lands in the
+  // `calls/:id` run view a beat after `status_changed: completed`
+  // fires, and starting without the extraction forces every call
+  // through at least one retry. Sentiment runs immediately because it
+  // works off the webhook transcript alone.
+  await Promise.all([
+    getClassifyCallQueue().add(
+      'classify',
+      {
+        call_id: n.call_id,
+        run_id: n.envelope.run_id,
+        // Format-guard carrier/load at the queue boundary: downstream
+        // `markBooked` relies on the invariant that carrier_mc looks
+        // like an MC and load_id isn't a raw HR template.
+        carrier_mc: n.carrier_mc_valid ? n.carrier_mc : undefined,
+        load_id: n.load_id_plausible ? n.load_id : undefined,
+        transcript: n.transcript,
+        speakers: n.speakers,
+        duration_seconds: n.duration_seconds,
+        started_at: n.started_at,
+        ended_at: n.ended_at ?? n.started_at,
+        status: n.status,
+        extracted_data: n.extracted_data,
+        booking_decision: n.booking_decision,
+        final_rate_from_extraction: n.final_rate_from_extraction,
+      },
+      { delay: 3_000 },
+    ),
+    getAnalyzeSentimentQueue().add('sentiment', {
+      call_id: n.call_id,
+      run_id: n.envelope.run_id,
+      transcript: n.transcript,
+    }),
+  ])
+}
 
 const callCompletedRoute: FastifyPluginAsync = async (app) => {
   app.withTypeProvider<ZodTypeProvider>().post(
@@ -40,162 +260,41 @@ const callCompletedRoute: FastifyPluginAsync = async (app) => {
       },
     },
     async (req, reply) => {
-      const hasSignature = typeof req.headers['x-webhook-signature'] === 'string'
-      let signatureState: 'valid' | 'invalid' | 'absent' = 'absent'
-      if (hasSignature) {
-        signatureState = verifyWebhookSignature(req) ? 'valid' : 'invalid'
-      }
-      enrichWideEvent(req, { signature_state: signatureState })
+      const signatureState = resolveSignatureState(req)
 
       // HappyRobot posts a CloudEvents 1.0 envelope whose real payload
-      // is under `data` (see normalize-call-payload.ts). Unwrap first
-      // so the rest of the pipeline sees a single canonical shape.
-      const raw = req.body as Record<string, unknown>
-      const envelope = unwrapCloudEventPayload(raw)
-      const inner = envelope.inner
-      const pickString = (...values: unknown[]): string | undefined => {
-        for (const v of values) {
-          if (typeof v === 'string' && v.length > 0) return v
-        }
-        return undefined
-      }
-      const pickNumber = (...values: unknown[]): number | undefined => {
-        for (const v of values) {
-          if (typeof v === 'number' && Number.isFinite(v)) return v
-        }
-        return undefined
-      }
-      const vars = (inner.variables ?? {}) as Record<string, unknown>
-      const speakers = extractSpeakersFromPayload(inner)
-      const transcript = resolveTranscript(inner, speakers)
-
-      // `negotiate_offer` in HappyRobot templates `call_id: @session_id`,
-      // so prefer the envelope's `session_id` to correlate the webhook
-      // with the offer rows already written to Convex. `'unknown'` is
-      // the sentinel for "no correlation id at all" and is caught below.
-      const call_id =
-        envelope.session_id ??
-        envelope.run_id ??
-        pickString(inner.call_id, vars.session_id, vars.call_id) ??
-        'unknown'
-      const status = envelope.status_current ?? pickString(inner.status) ?? 'completed'
-      const carrier_mc = pickString(inner.carrier_mc, vars.carrier_mc, vars.mc_number)
-      const load_id = pickString(inner.load_id, vars.load_id, vars.reference_number)
-      const duration_seconds = pickNumber(inner.duration_seconds)
-      const phone_number = pickString(inner.phone_number, vars.phone_number)
-      // Convex requires `started_at: string`; fall back to the status
-      // transition time, then the envelope emission time, then now.
-      const started_at =
-        pickString(inner.started_at) ??
-        envelope.status_updated_at ??
-        envelope.event_time ??
-        new Date().toISOString()
-      const ended_at = pickString(inner.ended_at) ?? envelope.status_updated_at
-      const extracted_data =
-        (inner.extracted_data as Record<string, unknown> | undefined) ??
-        (inner.extraction as Record<string, unknown> | undefined)
-      const is_terminal = isTerminalStatus(envelope.status_current)
-
-      enrichWideEvent(req, {
-        call_id,
-        call_status: status,
-        cloudevent: envelope.is_cloud_event,
-        cloudevent_type: envelope.cloudevent_type,
-        status_current: envelope.status_current,
-        status_previous: envelope.status_previous,
-        is_terminal,
-        has_transcript: transcript.length > 0,
-        speaker_turns: speakers?.length ?? 0,
-        carrier_mc,
-        load_id,
-        duration_seconds,
-        phone_present: Boolean(phone_number),
-        // Diagnostic: top-level keys on both the envelope and the
-        // unwrapped body. Low-cardinality (sender-stable), no PII.
-        payload_keys: Object.keys(raw)
-          .sort((a, b) => a.localeCompare(b))
-          .join(','),
-        data_keys: envelope.is_cloud_event
-          ? Object.keys(inner)
-              .sort((a, b) => a.localeCompare(b))
-              .join(',')
-          : undefined,
-        // The `session.status_changed` envelope often arrives with
-        // `carrier_mc` undefined; surfacing the `vars` keys lets us
-        // see whether HappyRobot stored `mc_number` / `carrier_mc` at
-        // all, and under which name. Low-cardinality because the
-        // workflow's variable shape is sender-stable.
-        vars_keys:
-          Object.keys(vars)
-            .sort((a, b) => a.localeCompare(b))
-            .join(',') || undefined,
-        has_extracted_data: extracted_data !== undefined,
-      })
+      // is under `data` (see normalize-call-payload.ts). The templated
+      // per-node webhook ships a flat body. `normalizeCallEvent` handles
+      // both shapes.
+      const normalized = normalizeCallEvent(req.body as Record<string, unknown>)
+      enrichWebhookEvent(req, normalized, signatureState)
       webhookReceivedCounter.add(1, {
         signature_state: signatureState,
-        status,
+        status: normalized.status,
       })
 
       // `session.status_changed` fires on every transition
       // (`queued` -> `in-progress` -> `completed`). Only terminal
-      // statuses should advance the downstream pipeline; acking 200
-      // on the rest avoids creating a stream of partial `calls` rows
-      // and tells HappyRobot the delivery succeeded.
-      if (!is_terminal) {
+      // statuses should advance the downstream pipeline; acking 200 on
+      // the rest avoids creating a stream of partial `calls` rows and
+      // tells HappyRobot the delivery succeeded.
+      if (!normalized.is_terminal) {
         enrichWideEvent(req, { enqueued: false, skip_reason: 'non_terminal_status' })
         return { received: true as const }
       }
 
-      // Without a correlation id we cannot backfill from HR or join this
-      // webhook against prior offer rows -- the resulting calls row would
-      // be pure noise (`call_id: 'unknown'`, empty everything). Ack 200
-      // so HR doesn't retry, but skip the Convex write.
-      if (call_id === 'unknown') {
-        // Counter already fired above for this delivery; the skip branch
-        // is observed via the wide-event `skip_reason` instead of a second
-        // counter increment to avoid double-counting the same webhook.
+      // Without a correlation id we cannot backfill from HR or join
+      // this webhook against prior offer rows -- the resulting calls
+      // row would be pure noise. Ack 200 so HR doesn't retry, but skip
+      // the Convex write.
+      if (normalized.call_id === 'unknown') {
         enrichWideEvent(req, { enqueued: false, skip_reason: 'no_correlation_id' })
         return { received: true as const }
       }
 
       try {
-        // Fan-out: BullMQ workers sharing a queue name compete, so publish
-        // to two topics (classify + sentiment) for parallel processing.
-        // The classify job is delayed 3s so the first attempt doesn't race
-        // HappyRobot's Extract node -- HR's extraction lands in the
-        // `calls/:id` run view a beat after `status_changed: completed`
-        // fires, and starting without the extraction forces every call
-        // through at least one retry. Sentiment runs immediately because
-        // it works off the webhook transcript alone.
-        await Promise.all([
-          getClassifyCallQueue().add(
-            'classify',
-            {
-              call_id,
-              // `call_id` stays bound to `session_id` for Convex correlation
-              // with negotiate_offer rows. `run_id` is what HR's
-              // `/api/v1/runs/:run_id` lookup actually wants.
-              run_id: envelope.run_id,
-              carrier_mc,
-              load_id,
-              transcript,
-              speakers,
-              duration_seconds,
-              started_at,
-              ended_at: ended_at ?? started_at,
-              status,
-              extracted_data,
-            },
-            { delay: 3_000 },
-          ),
-          getAnalyzeSentimentQueue().add('sentiment', {
-            call_id,
-            run_id: envelope.run_id,
-            transcript,
-          }),
-        ])
+        await enqueueClassifyJobs(normalized)
         enrichWideEvent(req, { enqueued: true })
-
         return { received: true as const }
       } catch (err) {
         enrichWideEvent(req, { failure_stage: 'webhook_processing' })

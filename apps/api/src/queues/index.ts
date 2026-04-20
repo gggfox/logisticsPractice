@@ -90,6 +90,14 @@ export const ClassifyCallInputSchema = z.object({
   ended_at: z.string(),
   status: z.string(),
   extracted_data: z.record(z.unknown()).optional(),
+  // `booking_decision` + `final_rate_from_extraction` are parsed out of
+  // `extracted_data` at the webhook edge (see `validation.ts`) so the
+  // classify worker has them pre-decoded. They gate the "promote to
+  // `booked` + flip load status" path that prod currently skips when
+  // HR's runs-API backfill fails. Both optional -- flat-shape webhook
+  // fixtures and pre-extraction deliveries still enqueue cleanly.
+  booking_decision: z.enum(['yes', 'no']).optional(),
+  final_rate_from_extraction: z.number().positive().optional(),
 })
 export type ClassifyCallInput = z.infer<typeof ClassifyCallInputSchema>
 

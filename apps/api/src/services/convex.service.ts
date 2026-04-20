@@ -106,6 +106,15 @@ export const convexService = {
       started_at?: string
       ended_at?: string
     }) => getClient().mutation(api.calls.upsertFromOffer, params),
+
+    markBooked: (params: {
+      call_id: string
+      load_id: string
+      carrier_mc: string
+      final_rate: number
+      started_at?: string
+      ended_at?: string
+    }) => getClient().mutation(api.calls.markBooked, params),
   },
 
   negotiations: {

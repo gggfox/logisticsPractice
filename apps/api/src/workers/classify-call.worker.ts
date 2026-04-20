@@ -9,8 +9,57 @@ import {
   QUEUE_NAMES,
   getRedisConnection,
 } from '../queues/index.js'
+import { isValidMcFormat } from '../routes/webhooks/validation.js'
 import { convexService } from '../services/convex.service.js'
 import { type HappyRobotCallRun, getRun } from '../services/happyrobot.service.js'
+
+/**
+ * Fields that are safe to send to `calls.create` even when the Convex
+ * validator is lagging the API deployment. Kept in sync with the
+ * original `packages/convex/convex/calls.ts` contract -- anything added
+ * after this comment is a diagnostic / future field and must go on the
+ * second-chance shape in `createCallWithFallback` so schema drift never
+ * drops a call row.
+ */
+type CallsCreateInput = Parameters<typeof convexService.calls.create>[0]
+
+export function stripDiagnosticFields(input: CallsCreateInput): CallsCreateInput {
+  const { run_id: _run_id, hr_run_fetched: _hr_run_fetched, ...base } = input
+  return base
+}
+
+/**
+ * Create the call row, falling back to the pre-diagnostic-fields shape
+ * if the deployed Convex validator rejects a field the app is sending.
+ * Convex's deployed functions can lag the API (Dokploy auto-deploys the
+ * API; Convex only redeploys via `pnpm -F @carrier-sales/convex deploy`
+ * or the CI job in `.github/workflows/ci.yml`). On drift the full
+ * shape fails with `ArgumentValidationError`; the fallback guarantees
+ * the dashboard never silently loses a call row.
+ */
+async function createCallWithFallback(
+  input: CallsCreateInput,
+  {
+    enrich,
+    runId,
+  }: { enrich: (fields: Record<string, unknown>) => void; runId: string | undefined },
+): Promise<{ fellBack: boolean }> {
+  try {
+    await convexService.calls.create(input)
+    return { fellBack: false }
+  } catch (err) {
+    enrich({
+      convex_create_fallback: true,
+      convex_create_first_error: err instanceof Error ? err.message : String(err),
+    })
+    logger.warn(
+      { err, call_id: input.call_id, run_id: runId },
+      'calls.create failed with extended shape; retrying without diagnostic fields',
+    )
+    await convexService.calls.create(stripDiagnosticFields(input))
+    return { fellBack: true }
+  }
+}
 
 /**
  * Map HR's AI-Classify tag onto our internal `CallOutcome` enum. HR's tag
@@ -97,6 +146,157 @@ export function isClassifyInputReady(merged: BackfilledClassifyInput): boolean {
 }
 
 /**
+ * Collapse the three `outcome` signals into the final `CallOutcome`.
+ * Pure so the classify worker body stays under the sonarqube cognitive
+ * complexity cap. Priority order matches the source reliability:
+ *   1. `dropped` on the final attempt when extraction never arrived.
+ *   2. HR's AI-Extract `booking_decision: "yes"`.
+ *   3. HR's AI-Classify tag (`Success`/`Rate too high`/`Not interested`).
+ *   4. Keyword scan on the webhook transcript.
+ */
+export function resolveOutcome(args: {
+  ready: boolean
+  isFinalAttempt: boolean
+  booking_decision: 'yes' | 'no' | undefined
+  hr_classify_tag: string | undefined
+  status: string
+  transcript: string
+  load_id: string | undefined
+  carrier_mc: string
+}): CallOutcome {
+  if (!args.ready && args.isFinalAttempt) return 'dropped'
+  if (args.booking_decision === 'yes') return 'booked'
+  const fromTag = outcomeFromHrTag(args.hr_classify_tag)
+  if (fromTag) return fromTag
+  return classifyOutcome({
+    status: args.status,
+    transcript: args.transcript,
+    load_id: args.load_id,
+    carrier_mc: args.carrier_mc === 'unknown' ? undefined : args.carrier_mc,
+  })
+}
+
+type Enrich = (fields: Record<string, unknown>) => void
+
+/**
+ * One indexed Convex query: `true` only when the load row exists. Treats
+ * Convex errors as `false` so a transient outage can't spuriously flip a
+ * non-existent load to `booked`; the error is still recorded on the wide
+ * event for follow-up.
+ */
+async function checkLoadExists(
+  load_id: string | undefined,
+  { callId, enrich }: { callId: string; enrich: Enrich },
+): Promise<boolean> {
+  if (load_id === undefined) return false
+  try {
+    const load = await convexService.loads.getByLoadId(load_id)
+    return load !== null
+  } catch (err) {
+    logger.warn(
+      { err, call_id: callId, load_id },
+      'classify: loads.getByLoadId validation lookup failed',
+    )
+    enrich({ load_lookup_error: err instanceof Error ? err.message : String(err) })
+    return false
+  }
+}
+
+async function updateLoadStatusBooked(
+  load_id: string,
+  { callId, enrich }: { callId: string; enrich: Enrich },
+): Promise<boolean> {
+  try {
+    await convexService.loads.updateStatus(load_id, 'booked')
+    return true
+  } catch (err) {
+    logger.warn({ err, call_id: callId, load_id }, 'classify: loads.updateStatus(booked) failed')
+    enrich({ load_status_update_error: err instanceof Error ? err.message : String(err) })
+    return false
+  }
+}
+
+interface WriteClassifyResult {
+  fellBack: boolean
+  load_status_updated: boolean
+}
+
+/**
+ * Two write paths, selected by the authoritative-book gate in the caller:
+ *
+ *   - `authoritative_book = true`: same contract as `POST
+ *     /api/v1/loads/:load_id/book`. Forces `outcome: 'booked'` with
+ *     carrier_mc + load_id + final_rate on the calls row via
+ *     `markBooked`, then flips the load to `booked`. Used when validation
+ *     (MC format + load DB existence) passed.
+ *
+ *   - otherwise: existing `createCallWithFallback` path. If the outcome
+ *     still says `booked` (e.g. HR Classify tag `Success`) AND the load
+ *     exists, we still mirror to the load status so the load-board
+ *     doesn't go stale -- better than a silently-available load that
+ *     just got booked.
+ */
+async function writeClassifyResult(args: {
+  data: ClassifyCallInput
+  merged: BackfilledClassifyInput
+  outcome: CallOutcome
+  final_rate: number | undefined
+  negotiations_count: number
+  authoritative_book: boolean
+  load_exists: boolean
+  enrich: Enrich
+}): Promise<WriteClassifyResult> {
+  const { data, merged, outcome, final_rate, negotiations_count, enrich } = args
+
+  if (args.authoritative_book && merged.load_id !== undefined && final_rate !== undefined) {
+    await convexService.calls.markBooked({
+      call_id: data.call_id,
+      load_id: merged.load_id,
+      carrier_mc: merged.carrier_mc,
+      final_rate,
+      started_at: data.started_at,
+      ended_at: data.ended_at,
+    })
+    const load_status_updated = await updateLoadStatusBooked(merged.load_id, {
+      callId: data.call_id,
+      enrich,
+    })
+    return { fellBack: false, load_status_updated }
+  }
+
+  const result = await createCallWithFallback(
+    {
+      call_id: data.call_id,
+      carrier_mc: merged.carrier_mc,
+      load_id: merged.load_id,
+      transcript: merged.transcript,
+      speakers: merged.speakers,
+      outcome,
+      negotiation_rounds: negotiations_count,
+      final_rate,
+      started_at: data.started_at,
+      ended_at: data.ended_at,
+      duration_seconds: merged.duration_seconds,
+      // Persist the exact HR identifiers + backfill outcome so prod
+      // failures are debuggable via `npx convex run calls:getByCallId`
+      // alone -- without requiring SigNoz UI or Dokploy log access.
+      run_id: data.run_id,
+      hr_run_fetched: merged.hr_run_fetched,
+    },
+    { enrich, runId: data.run_id },
+  )
+
+  let load_status_updated = false
+  if (outcome === 'booked' && args.load_exists && merged.load_id !== undefined) {
+    load_status_updated = await updateLoadStatusBooked(merged.load_id, {
+      callId: data.call_id,
+      enrich,
+    })
+  }
+  return { fellBack: result.fellBack, load_status_updated }
+}
+
+/**
  * Merge the webhook-side `ClassifyCallInput` with HR's backfilled call-run
  * view. Pure -- no network, no time, no Convex. Exported for unit testing.
  */
@@ -139,6 +339,145 @@ export function mergeRunIntoInput(
   }
 }
 
+/**
+ * Single classify attempt: backfill from HR, validate, classify, write.
+ * Extracted so the BullMQ wrapper stays under the biome cognitive
+ * complexity cap while still doing one logical thing.
+ */
+async function runClassifyJob(
+  data: ClassifyCallInput,
+  ctx: { attemptsMade: number; maxAttempts: number },
+  enrich: Enrich,
+): Promise<void> {
+  const { attemptsMade, maxAttempts } = ctx
+  const isFinalAttempt = attemptsMade + 1 >= maxAttempts
+
+  // Fetch the full HR run so we can backfill transcript, extraction,
+  // and AI-Classify tag that the `session.status_changed` envelope
+  // never carries. Swallow errors: classify must still write a row
+  // even if HR is down.
+  //
+  // HR's `/api/v1/runs/:run_id` is keyed by `run_id`, not `session_id`.
+  // Skip the lookup when `run_id` is absent (older enqueued jobs from
+  // before this field was added, or flat-shape test payloads) and rely
+  // on webhook data alone.
+  const run =
+    data.run_id === undefined
+      ? null
+      : await getRun(data.run_id).catch((err) => {
+          logger.warn(
+            { run_id: data.run_id, call_id: data.call_id, err },
+            'happyrobot getRun failed',
+          )
+          return null
+        })
+
+  const merged = mergeRunIntoInput(data, run)
+  const ready = isClassifyInputReady(merged)
+
+  enrich({
+    call_id: data.call_id,
+    run_id: data.run_id,
+    has_run_id: data.run_id !== undefined,
+    carrier_mc: merged.carrier_mc,
+    load_id: merged.load_id,
+    call_status: data.status,
+    transcript_length: merged.transcript.length,
+    duration_seconds: merged.duration_seconds,
+    hr_run_fetched: merged.hr_run_fetched,
+    hr_classify_tag: merged.hr_classify_tag,
+    transcript_source: merged.transcript_source,
+    attempts_made: attemptsMade,
+    max_attempts: maxAttempts,
+    ready,
+  })
+
+  // Extraction race: HappyRobot's Extract node populates `carrier_mc` /
+  // `load_id` on the `/v1/calls/:id` run view a beat after
+  // `status_changed: completed` fires. Throwing here triggers BullMQ's
+  // exponential backoff so we re-fetch the run on the next attempt.
+  // On the final attempt we still persist a row so the dashboard
+  // doesn't lose the call -- tagged with
+  // `dropped_reason: 'extraction_timeout'` to distinguish it from a
+  // genuine no-match drop.
+  if (!ready && !isFinalAttempt) {
+    enrich({
+      skipped_write: true,
+      skip_reason: 'extraction_not_ready',
+      failure_stage: 'extraction_not_ready',
+    })
+    throw new Error(
+      `HappyRobot extraction not ready for call ${data.call_id} (attempt ${attemptsMade + 1}/${maxAttempts}); will retry`,
+    )
+  }
+
+  const negotiations = await convexService.negotiations.getByCallId(data.call_id)
+  const finalNeg = negotiations.at(-1)
+  const negotiatedRate = finalNeg?.accepted ? finalNeg.offered_rate : undefined
+  const extractionFinalRate = numberFromExtraction(merged.extraction, 'final_rate')
+  const final_rate = negotiatedRate ?? data.final_rate_from_extraction ?? extractionFinalRate
+
+  // Post-merge authoritative validation:
+  //   1. MC format (cheap, local) -- see validation.ts.
+  //   2. Load existence in Convex (one indexed query).
+  // These are what the user asked the webhook to enforce: no row
+  // ever gets promoted to `booked` if either guard fails.
+  const mc_valid = isValidMcFormat(merged.carrier_mc)
+  const load_exists = await checkLoadExists(merged.load_id, { callId: data.call_id, enrich })
+
+  const outcome = resolveOutcome({
+    ready,
+    isFinalAttempt,
+    booking_decision: data.booking_decision,
+    hr_classify_tag: merged.hr_classify_tag,
+    status: data.status,
+    transcript: merged.transcript,
+    load_id: merged.load_id,
+    carrier_mc: merged.carrier_mc,
+  })
+
+  // Authoritative booking gate: promote to `markBooked` only when
+  // EVERY prerequisite is met. Missing load, malformed MC, or missing
+  // final rate all drop back to the existing `createCallWithFallback`
+  // path so we still capture the call without corrupting load-board
+  // state. This is the "validate before booking" contract.
+  const authoritative_book =
+    outcome === 'booked' &&
+    mc_valid &&
+    load_exists &&
+    merged.load_id !== undefined &&
+    final_rate !== undefined
+
+  enrich({
+    mc_valid,
+    load_exists,
+    booking_decision: data.booking_decision,
+    final_rate_from_extraction: data.final_rate_from_extraction,
+    authoritative_book,
+  })
+
+  const writeResult = await writeClassifyResult({
+    data,
+    merged,
+    outcome,
+    final_rate,
+    negotiations_count: negotiations.length,
+    authoritative_book,
+    load_exists,
+    enrich,
+  })
+
+  callOutcomeCounter.add(1, { outcome })
+  enrich({
+    outcome,
+    negotiation_rounds: negotiations.length,
+    final_rate,
+    load_status_updated: writeResult.load_status_updated,
+    ...(writeResult.fellBack ? { failure_stage: 'convex_schema_drift' as const } : {}),
+    ...(!ready && isFinalAttempt ? { dropped_reason: 'extraction_timeout' as const } : {}),
+  })
+}
+
 export function createClassifyCallWorker(): Worker<ClassifyCallInput> {
   const worker = new Worker<ClassifyCallInput>(
     QUEUE_NAMES.classifyCall,
@@ -149,119 +488,12 @@ export function createClassifyCallWorker(): Worker<ClassifyCallInput> {
       // enqueued without a per-job override -- treat the very first run
       // as the only run in that degenerate case so we never loop.
       const maxAttempts = job.opts.attempts ?? 1
-      const isFinalAttempt = job.attemptsMade + 1 >= maxAttempts
 
       await withWideEvent(
         'ClassifyCall',
         { logger, seed: { trigger_type: 'queue', trigger_topic: QUEUE_NAMES.classifyCall } },
         async (enrich) => {
-          // Fetch the full HR run so we can backfill transcript, extraction,
-          // and AI-Classify tag that the `session.status_changed` envelope
-          // never carries. Swallow errors: classify must still write a row
-          // even if HR is down.
-          //
-          // HR's `/api/v1/runs/:run_id` is keyed by `run_id`, not
-          // `session_id`. Skip the lookup when `run_id` is absent (older
-          // enqueued jobs from before this field was added, or flat-shape
-          // test payloads) and rely on webhook data alone.
-          const run =
-            data.run_id === undefined
-              ? null
-              : await getRun(data.run_id).catch((err) => {
-                  logger.warn(
-                    { run_id: data.run_id, call_id: data.call_id, err },
-                    'happyrobot getRun failed',
-                  )
-                  return null
-                })
-
-          const merged = mergeRunIntoInput(data, run)
-          const ready = isClassifyInputReady(merged)
-
-          enrich({
-            call_id: data.call_id,
-            run_id: data.run_id,
-            has_run_id: data.run_id !== undefined,
-            carrier_mc: merged.carrier_mc,
-            load_id: merged.load_id,
-            call_status: data.status,
-            transcript_length: merged.transcript.length,
-            duration_seconds: merged.duration_seconds,
-            hr_run_fetched: merged.hr_run_fetched,
-            hr_classify_tag: merged.hr_classify_tag,
-            transcript_source: merged.transcript_source,
-            attempts_made: job.attemptsMade,
-            max_attempts: maxAttempts,
-            ready,
-          })
-
-          // Extraction race: HappyRobot's Extract node populates
-          // `carrier_mc` / `load_id` on the `/v1/calls/:id` run view a
-          // beat after `status_changed: completed` fires. Throwing here
-          // triggers BullMQ's exponential backoff so we re-fetch the
-          // run on the next attempt. On the final attempt we still
-          // persist a row so the dashboard doesn't lose the call --
-          // tagged with `dropped_reason: 'extraction_timeout'` to
-          // distinguish it from a genuine no-match drop.
-          if (!ready && !isFinalAttempt) {
-            enrich({
-              skipped_write: true,
-              skip_reason: 'extraction_not_ready',
-              failure_stage: 'extraction_not_ready',
-            })
-            throw new Error(
-              `HappyRobot extraction not ready for call ${data.call_id} (attempt ${job.attemptsMade + 1}/${maxAttempts}); will retry`,
-            )
-          }
-
-          // Prefer HR's AI-Classify tag; fall back to the keyword scan when
-          // the tag is absent or unrecognized. When we drop due to an
-          // extraction timeout, force `outcome: 'dropped'` -- the row
-          // exists for audit / dashboard continuity only and should not
-          // be counted as a decline or a no-match.
-          const outcome =
-            !ready && isFinalAttempt
-              ? ('dropped' as CallOutcome)
-              : (outcomeFromHrTag(merged.hr_classify_tag) ??
-                classifyOutcome({
-                  status: data.status,
-                  transcript: merged.transcript,
-                  load_id: merged.load_id,
-                  carrier_mc: merged.carrier_mc === 'unknown' ? undefined : merged.carrier_mc,
-                }))
-
-          const negotiations = await convexService.negotiations.getByCallId(data.call_id)
-          const finalNeg = negotiations[negotiations.length - 1]
-          const negotiatedRate = finalNeg?.accepted ? finalNeg.offered_rate : undefined
-          const extractionFinalRate = numberFromExtraction(merged.extraction, 'final_rate')
-          const final_rate = negotiatedRate ?? extractionFinalRate
-
-          await convexService.calls.create({
-            call_id: data.call_id,
-            carrier_mc: merged.carrier_mc,
-            load_id: merged.load_id,
-            transcript: merged.transcript,
-            speakers: merged.speakers,
-            outcome,
-            negotiation_rounds: negotiations.length,
-            final_rate,
-            started_at: data.started_at,
-            ended_at: data.ended_at,
-            duration_seconds: merged.duration_seconds,
-            // Persist the exact HR identifiers + backfill outcome so prod
-            // failures are debuggable via `npx convex run calls:getByCallId`
-            // alone -- without requiring SigNoz UI or Dokploy log access.
-            run_id: data.run_id,
-            hr_run_fetched: merged.hr_run_fetched,
-          })
-
-          callOutcomeCounter.add(1, { outcome })
-          enrich({
-            outcome,
-            negotiation_rounds: negotiations.length,
-            final_rate,
-            ...(!ready && isFinalAttempt ? { dropped_reason: 'extraction_timeout' as const } : {}),
-          })
+          await runClassifyJob(data, { attemptsMade: job.attemptsMade, maxAttempts }, enrich)
         },
       )
     },

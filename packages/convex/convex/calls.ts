@@ -188,6 +188,64 @@ export const deleteOrphans = mutation({
   },
 })
 
+// Authoritative "deal closed" write. Called by `POST
+// /api/v1/loads/:load_id/book` after the caller accepts a final rate.
+// Unlike `upsertFromOffer` -- which deliberately never overwrites a
+// concrete outcome mid-negotiation -- this mutation **always** forces
+// `outcome: 'booked'`, `carrier_mc`, `load_id`, and `final_rate`. It is
+// the only endpoint that can promote an earlier classify-written
+// `dropped` / `declined` row to `booked`, so the call-history row and
+// the load-board stay consistent with what actually happened on the
+// call.
+export const markBooked = mutation({
+  args: {
+    call_id: v.string(),
+    load_id: v.string(),
+    carrier_mc: v.string(),
+    final_rate: v.number(),
+    started_at: v.optional(v.string()),
+    ended_at: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query('calls')
+      .withIndex('by_call_id', (q) => q.eq('call_id', args.call_id))
+      .first()
+
+    if (!existing) {
+      await ctx.db.insert('calls', {
+        call_id: args.call_id,
+        carrier_mc: args.carrier_mc,
+        load_id: args.load_id,
+        transcript: '',
+        outcome: 'booked',
+        final_rate: args.final_rate,
+        // Seed at least one round so the UI doesn't show "0 rounds" on
+        // a successful booking -- the log-offer route may not have fired.
+        negotiation_rounds: 1,
+        started_at: args.started_at ?? new Date().toISOString(),
+        ended_at: args.ended_at,
+      })
+      return
+    }
+
+    const patch: Record<string, unknown> = {
+      carrier_mc: args.carrier_mc,
+      load_id: args.load_id,
+      final_rate: args.final_rate,
+      outcome: 'booked',
+    }
+    // Preserve whatever negotiation_rounds the log-offer route already
+    // recorded; only floor it at 1 so a booked row never reads as 0 rounds.
+    if ((existing.negotiation_rounds ?? 0) < 1) {
+      patch.negotiation_rounds = 1
+    }
+    if (args.ended_at !== undefined) patch.ended_at = args.ended_at
+
+    await ctx.db.patch(existing._id, patch)
+  },
+})
+
 // Purpose-built patch so the sentiment worker never clobbers the
 // classify worker's `outcome`. The worker race was the root cause of
 // every recent call showing `declined`.
