@@ -65,7 +65,15 @@ const findLoadRoute: FastifyPluginAsync = async (app) => {
           equipment_type: load.equipment_type,
         })
 
-        return load
+        // Strip Convex-internal fields (`_id`, `_creationTime`) from the
+        // public response. An upstream workflow that templates `call_id`
+        // from this response's `_id` would silently collide with real
+        // HappyRobot session ids in the `calls` table; removing the field
+        // here means there is nothing for the workflow to accidentally
+        // grab. The canonical shape lives in `LoadSchema` and does not
+        // include these system fields.
+        const { _id, _creationTime, ...publicLoad } = load
+        return publicLoad
       } catch (err) {
         enrichWideEvent(req, { failure_stage: 'convex_lookup' })
         req.log.error({ err, load_id }, 'Failed to fetch load')
