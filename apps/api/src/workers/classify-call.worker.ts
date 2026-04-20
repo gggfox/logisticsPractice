@@ -58,11 +58,25 @@ export function createClassifyCallWorker(): Worker<ClassifyCallInput> {
           const finalNeg = negotiations[negotiations.length - 1]
           const finalRate = finalNeg?.accepted ? finalNeg.offered_rate : undefined
 
+          // HappyRobot often only fills `carrier_mc` on the nested
+          // extraction block; fall back to that before giving up and
+          // writing the sentinel `'unknown'`. Removes the stream of
+          // `unknown`-MC rows that poison `by_carrier` queries.
+          const extracted = data.extracted_data ?? {}
+          const extractedMc =
+            typeof extracted.carrier_mc === 'string'
+              ? extracted.carrier_mc
+              : typeof extracted.mc_number === 'string'
+                ? extracted.mc_number
+                : undefined
+          const carrier_mc = data.carrier_mc ?? extractedMc ?? 'unknown'
+
           await convexService.calls.create({
             call_id: data.call_id,
-            carrier_mc: data.carrier_mc ?? 'unknown',
+            carrier_mc,
             load_id: data.load_id,
             transcript: data.transcript ?? '',
+            speakers: data.speakers,
             outcome,
             negotiation_rounds: negotiations.length,
             final_rate: finalRate,

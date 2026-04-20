@@ -1,10 +1,12 @@
 import { Badge } from '@/components/Badge'
+import { CallDetailDrawer } from '@/components/CallDetailDrawer'
 import { EmptyState } from '@/components/EmptyState'
 import { PageLayout } from '@/components/layout/PageLayout'
 import { formatDateTime } from '@/lib/formatters'
 import { api } from '@carrier-sales/convex/convex/_generated/api'
 import { useQuery } from 'convex/react'
 import { Clock, Inbox } from 'lucide-react'
+import { useState } from 'react'
 
 const FEED_SKELETON_KEYS = ['sk-a', 'sk-b', 'sk-c', 'sk-d', 'sk-e', 'sk-f'] as const
 
@@ -16,6 +18,10 @@ type CallRecord = {
   sentiment?: string
   duration_seconds?: number
   started_at: string
+  negotiation_rounds?: number
+  final_rate?: number
+  transcript?: string
+  speakers?: Array<{ role: string; text: string }>
 }
 
 function outcomeBorderClass(outcome: string | undefined): string {
@@ -53,7 +59,12 @@ function formatDurationSeconds(seconds: number | undefined): string {
   return '—'
 }
 
-function CallFeedBody({ calls }: Readonly<{ calls: CallRecord[] | undefined }>) {
+interface CallFeedBodyProps {
+  calls: CallRecord[] | undefined
+  onSelect: (call: CallRecord) => void
+}
+
+function CallFeedBody({ calls, onSelect }: Readonly<CallFeedBodyProps>) {
   if (calls === undefined) {
     return (
       <ul className="divide-y divide-surface-border/70">
@@ -83,6 +94,8 @@ function CallFeedBody({ calls }: Readonly<{ calls: CallRecord[] | undefined }>) 
         <li key={call._id}>
           <button
             type="button"
+            onClick={() => onSelect(call)}
+            data-testid="live-feed-call"
             className={`group flex w-full items-start gap-4 border-l-4 bg-surface-1 px-5 py-4 text-left transition hover:bg-surface-2/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent-500/40 ${outcomeBorderClass(call.outcome)}`}
           >
             <div className="min-w-0 flex-1">
@@ -121,6 +134,7 @@ function CallFeedBody({ calls }: Readonly<{ calls: CallRecord[] | undefined }>) 
 
 export function LiveFeedPage() {
   const calls = useQuery(api.calls.getRecent, { limit: 30 }) as CallRecord[] | undefined
+  const [selectedCall, setSelectedCall] = useState<CallRecord | null>(null)
 
   const liveBadge = (
     <span className="inline-flex items-center gap-2 rounded-full border border-rose-200 bg-rose-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300">
@@ -142,9 +156,10 @@ export function LiveFeedPage() {
     >
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl2 border border-surface-border/70 bg-surface-1 shadow-card">
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <CallFeedBody calls={calls} />
+          <CallFeedBody calls={calls} onSelect={setSelectedCall} />
         </div>
       </div>
+      <CallDetailDrawer call={selectedCall} onClose={() => setSelectedCall(null)} />
     </PageLayout>
   )
 }

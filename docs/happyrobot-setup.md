@@ -71,12 +71,10 @@ AI Classify (call outcome)
 AI Extract (structured data)
 ```
 
-The current deployed workflow (`Inbound Carrier Sales New`, id `0falkz3hrfh8`) already
-has the Web call trigger, Inbound Voice Agent, Prompt, `verify_carrier` + `find_available_loads`
-tools, and the Classify + Extract tail. It is **missing** the `find_load`, `negotiate_offer`,
-and `transfer_to_sales` tools, the prompt has two `⚠️ (Part missing)` placeholders, and the
-webhook nodes point at placeholder AWS API Gateway URLs that need to be replaced with your
-deployed `{BASE_URL}` (see §5).
+The current deployed workflow (`gggfox`, id `609rj199bahf`) has the full node set:
+Web call trigger, Inbound Voice Agent, Prompt, all five tools (`verify_carrier`, `find_loads`,
+`find_load`, `negotiate_offer`, `transfer_to_sales`), and the Classify + Extract tail. The
+webhook nodes should point at your deployed `{BASE_URL}` (see §5).
 
 ---
 
@@ -147,7 +145,7 @@ Add a **Prompt** node as the first child under the Voice Agent.
 | Use Custom LLM          | `No`                                                                  |
 | Model                   | `Turbo`                                                               |
 | Initial Message         | `Thank you for calling Happy Robot Logistics, how can I help?`        |
-| Prompt                  | See template below — must have **no `⚠️ (Part missing)` gaps**         |
+| Prompt                  | See template below (all 7 sections, MC persistence baked into §3 and §5) |
 
 System prompt (paste into the Prompt field, replacing the current one):
 
@@ -175,9 +173,14 @@ Ask: "Do you see a reference number on that posting?"
 
 ## 3. Carrier qualification
 Ask: "What's your MC number?"
-Call the verify_carrier tool with the MC number. Confirm the returned company
-name with the caller ("Is this <company_name>?"). If the name does not match,
-ask for the MC number again (up to twice).
+Call the verify_carrier tool with the MC number. The tool's `mc_number`
+parameter is automatically saved as @mc_number for the rest of the
+call -- always reference @mc_number in later tool calls instead of
+re-asking the caller.
+
+Confirm the returned company name with the caller
+("Is this <company_name>?"). If the name does not match, ask for the MC
+number again (up to twice); each re-ask overwrites @mc_number.
 
 Only proceed if the tool returns eligible = true. If the carrier is not
 eligible (not authorized, not active, or unsafe), politely decline and end
@@ -192,8 +195,14 @@ Confirm the load details using this style:
    this one — would you like to book the load?"
 
 ## 5. Negotiation (max 3 rounds)
-If the caller counter-offers a rate, call the negotiate_offer tool with
-call_id, load_id, carrier_mc, and their offered_rate.
+If the caller counter-offers a rate, call the negotiate_offer tool with:
+  - call_id      = @session_id
+  - load_id      = the load_id from step 4 (saved as @load_id)
+  - carrier_mc   = @mc_number   <-- ALWAYS reuse; never ask again
+  - offered_rate = their numeric offer
+
+Do NOT ask the caller to repeat their MC number during negotiation --
+it is already in @mc_number from step 3.
 
 - If the tool returns accepted = true, confirm the final rate and move to
   transfer (step 6).
@@ -218,8 +227,10 @@ thing"). Avoid sounding robotic or overly formal. Always be courteous,
 regardless of outcome.
 ```
 
-Remove the two `⚠️ (Part missing)` placeholders currently in the deployed prompt — the
-sections above under *Carrier qualification* and *Finding a Load* replace them.
+The full template above is what's currently deployed as Version 2 on workflow
+`609rj199bahf`. Prior versions had only the first two sections (Background through
+"Getting the load reference"); the rewrite fills in sections 3–7 and bakes in the
+@mc_number persistence wording so the LLM does not re-ask the MC across turns.
 
 ---
 
@@ -298,7 +309,13 @@ See [`apps/api/src/steps/bridge/log-offer.step.ts`](../apps/api/src/steps/bridge
 | Description | `Evaluate a carrier's offered rate. Returns either accepted=true or a counter_offer. Handles up to 3 rounds per call_id. Use whenever the caller proposes a rate.` |
 | Message     | `AI` — "One moment, let me check on that number"                      |
 | Hold music  | `Acoustic`                                                            |
-| Parameters  | `call_id` (required, example: `@session_id`), `load_id` (required), `carrier_mc` (required), `offered_rate` (required, numeric) |
+| Parameters  | `call_id` (required, example: `@session_id`), `load_id` (required), `carrier_mc` (required, example/default: `@mc_number`), `offered_rate` (required, numeric) |
+
+The `@mc_number` example on `carrier_mc` makes the tool robust to the LLM forgetting the
+MC between negotiation rounds: HappyRobot resolves `@mc_number` from agent state (set by
+`verify_carrier` in step 3) when the LLM omits the parameter, so negotiation never stalls
+re-asking the caller. The server still enforces the field via `OfferRequestSchema` in
+[`packages/shared/src/schemas/negotiation.schema.ts`](../packages/shared/src/schemas/negotiation.schema.ts).
 
 **Child webhook:**
 

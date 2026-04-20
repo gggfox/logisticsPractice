@@ -73,6 +73,7 @@ export const convexService = {
       carrier_mc: string
       load_id?: string
       transcript: string
+      speakers?: Array<{ role: string; text: string }>
       outcome?: string
       sentiment?: string
       duration_seconds?: number
@@ -89,6 +90,9 @@ export const convexService = {
       final_rate?: number
       negotiation_rounds?: number
     }) => getClient().mutation(api.calls.updateOutcome, params),
+
+    updateSentiment: (params: { call_id: string; sentiment: string }) =>
+      getClient().mutation(api.calls.updateSentiment, params),
   },
 
   negotiations: {

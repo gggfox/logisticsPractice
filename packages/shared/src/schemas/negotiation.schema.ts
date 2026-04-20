@@ -13,10 +13,10 @@ export const NegotiationRoundSchema = z.object({
 export type NegotiationRound = z.infer<typeof NegotiationRoundSchema>
 
 export const OfferRequestSchema = z.object({
-  call_id: z.string().min(1),
-  load_id: z.string().min(1),
-  carrier_mc: z.string().min(1),
-  offered_rate: z.number().positive(),
+  call_id: z.coerce.string().min(1),
+  load_id: z.coerce.string().min(1),
+  carrier_mc: z.coerce.string().min(1),
+  offered_rate: z.coerce.number().positive(),
 })
 
 export type OfferRequest = z.infer<typeof OfferRequestSchema>

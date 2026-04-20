@@ -7,6 +7,7 @@ import { enrichWideEvent } from '../../observability/wide-event-store.js'
 import { verifyWebhookSignature } from '../../plugins/hmac.js'
 import { getAnalyzeSentimentQueue, getClassifyCallQueue } from '../../queues/index.js'
 import { ErrorBodySchema } from '../_error-schema.js'
+import { extractSpeakersFromPayload, resolveTranscript } from './normalize-call-payload.js'
 
 const WebhookAckSchema = z.object({ received: z.literal(true) })
 
@@ -60,7 +61,8 @@ const callCompletedRoute: FastifyPluginAsync = async (app) => {
         return undefined
       }
       const vars = (raw.variables ?? {}) as Record<string, unknown>
-      const extraction = (raw.extraction ?? {}) as Record<string, unknown>
+      const speakers = extractSpeakersFromPayload(raw)
+      const transcript = resolveTranscript(raw, speakers)
 
       const call_id =
         pickString(raw.call_id, raw.run_id, raw.session_id, vars.session_id, vars.call_id) ??
@@ -68,7 +70,6 @@ const callCompletedRoute: FastifyPluginAsync = async (app) => {
       const status = pickString(raw.status) ?? 'completed'
       const carrier_mc = pickString(raw.carrier_mc, vars.carrier_mc, vars.mc_number)
       const load_id = pickString(raw.load_id, vars.load_id, vars.reference_number)
-      const transcript = pickString(raw.transcript, extraction.transcript) ?? ''
       const duration_seconds = pickNumber(raw.duration_seconds)
       const phone_number = pickString(raw.phone_number, vars.phone_number)
       // Convex requires `started_at: string`; default to now so a
@@ -83,6 +84,7 @@ const callCompletedRoute: FastifyPluginAsync = async (app) => {
         call_id,
         call_status: status,
         has_transcript: transcript.length > 0,
+        speaker_turns: speakers?.length ?? 0,
         carrier_mc,
         load_id,
         duration_seconds,
@@ -107,6 +109,7 @@ const callCompletedRoute: FastifyPluginAsync = async (app) => {
             carrier_mc,
             load_id,
             transcript,
+            speakers,
             duration_seconds,
             started_at,
             ended_at: ended_at ?? started_at,

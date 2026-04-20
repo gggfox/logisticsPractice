@@ -18,9 +18,11 @@ export {
 
 export {
   CallSchema,
+  CallSpeakerTurnSchema,
   CallWebhookPayloadSchema,
   CallClassificationSchema,
   type Call,
+  type CallSpeakerTurn,
   type CallWebhookPayload,
   type CallClassification,
 } from './call.schema.js'

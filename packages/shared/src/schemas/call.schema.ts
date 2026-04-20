@@ -1,11 +1,19 @@
 import { z } from 'zod'
 import { CALL_OUTCOMES, SENTIMENTS } from '../constants/index.js'
 
+export const CallSpeakerTurnSchema = z.object({
+  role: z.string().min(1),
+  text: z.string(),
+})
+
+export type CallSpeakerTurn = z.infer<typeof CallSpeakerTurnSchema>
+
 export const CallSchema = z.object({
   call_id: z.string().min(1),
   carrier_mc: z.string().min(1),
   load_id: z.string().optional(),
   transcript: z.string().default(''),
+  speakers: z.array(CallSpeakerTurnSchema).optional(),
   outcome: z.enum(CALL_OUTCOMES).optional(),
   sentiment: z.enum(SENTIMENTS).optional(),
   duration_seconds: z.number().nonnegative().optional(),

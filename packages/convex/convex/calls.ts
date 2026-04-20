@@ -53,6 +53,7 @@ export const create = mutation({
     carrier_mc: v.string(),
     load_id: v.optional(v.string()),
     transcript: v.string(),
+    speakers: v.optional(v.array(v.object({ role: v.string(), text: v.string() }))),
     outcome: v.optional(v.string()),
     sentiment: v.optional(v.string()),
     duration_seconds: v.optional(v.number()),
@@ -61,7 +62,18 @@ export const create = mutation({
     started_at: v.string(),
     ended_at: v.optional(v.string()),
   },
+  // Upsert by `call_id`: HappyRobot re-delivers webhooks and the two
+  // workers (classify + sentiment) race on the same row. Patch on hit
+  // preserves any sentiment already written; insert on miss creates it.
   handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query('calls')
+      .withIndex('by_call_id', (q) => q.eq('call_id', args.call_id))
+      .first()
+    if (existing) {
+      await ctx.db.patch(existing._id, args)
+      return existing._id
+    }
     return await ctx.db.insert('calls', args)
   },
 })
@@ -87,5 +99,35 @@ export const updateOutcome = mutation({
     if (args.negotiation_rounds !== undefined) patch.negotiation_rounds = args.negotiation_rounds
 
     await ctx.db.patch(call._id, patch)
+  },
+})
+
+// Purpose-built patch so the sentiment worker never clobbers the
+// classify worker's `outcome`. The worker race was the root cause of
+// every recent call showing `declined`.
+export const updateSentiment = mutation({
+  args: {
+    call_id: v.string(),
+    sentiment: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const call = await ctx.db
+      .query('calls')
+      .withIndex('by_call_id', (q) => q.eq('call_id', args.call_id))
+      .first()
+    // The sentiment worker can land before the classify worker has
+    // created the row. Upsert a minimal record so sentiment is not lost.
+    if (!call) {
+      await ctx.db.insert('calls', {
+        call_id: args.call_id,
+        carrier_mc: 'unknown',
+        transcript: '',
+        sentiment: args.sentiment,
+        negotiation_rounds: 0,
+        started_at: new Date().toISOString(),
+      })
+      return
+    }
+    await ctx.db.patch(call._id, { sentiment: args.sentiment })
   },
 })

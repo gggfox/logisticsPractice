@@ -43,6 +43,7 @@ export default defineSchema({
     carrier_mc: v.string(),
     load_id: v.optional(v.string()),
     transcript: v.string(),
+    speakers: v.optional(v.array(v.object({ role: v.string(), text: v.string() }))),
     outcome: v.optional(v.string()),
     sentiment: v.optional(v.string()),
     duration_seconds: v.optional(v.number()),

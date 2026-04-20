@@ -63,6 +63,7 @@ export const ClassifyCallInputSchema = z.object({
   carrier_mc: z.string().optional(),
   load_id: z.string().optional(),
   transcript: z.string().optional(),
+  speakers: z.array(z.object({ role: z.string(), text: z.string() })).optional(),
   duration_seconds: z.number().optional(),
   started_at: z.string(),
   ended_at: z.string(),

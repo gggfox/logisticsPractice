@@ -106,9 +106,10 @@ export function createAnalyzeSentimentWorker(): Worker<AnalyzeSentimentInput> {
 
           const { sentiment, confidence } = analyzeSentiment(data.transcript)
 
-          await convexService.calls.updateOutcome({
+          // Patch sentiment only. The classify worker owns `outcome`;
+          // when this worker lands second (or first), never overwrite it.
+          await convexService.calls.updateSentiment({
             call_id: data.call_id,
-            outcome: 'declined',
             sentiment,
           })
 

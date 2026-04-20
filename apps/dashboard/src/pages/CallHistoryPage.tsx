@@ -1,4 +1,5 @@
 import { Badge } from '@/components/Badge'
+import { CallConversation } from '@/components/CallConversation'
 import { EmptyState } from '@/components/EmptyState'
 import { PageLayout } from '@/components/layout/PageLayout'
 import { formatCurrency, formatDateTime, formatDuration } from '@/lib/formatters'
@@ -44,6 +45,7 @@ type CallRowData = {
   final_rate?: number
   duration_seconds?: number
   transcript?: string
+  speakers?: Array<{ role: string; text: string }>
 }
 
 interface CallRowProps {
@@ -53,8 +55,6 @@ interface CallRowProps {
 }
 
 function CallRow({ call, expanded, onToggle }: CallRowProps) {
-  const transcriptText = call.transcript?.trim() ?? ''
-
   const handleKeyDown = (event: KeyboardEvent<HTMLTableRowElement>) => {
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault()
@@ -113,10 +113,10 @@ function CallRow({ call, expanded, onToggle }: CallRowProps) {
       {expanded ? (
         <tr className="bg-surface-2/60">
           <td colSpan={8} className="px-4 py-4">
-            <p className="eyebrow">Transcript</p>
-            <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded-lg border border-surface-border/70 bg-surface-1 p-3 font-sans text-sm text-slate-700 dark:text-slate-300">
-              {transcriptText || 'No transcript available.'}
-            </pre>
+            <p className="eyebrow">Conversation</p>
+            <div className="mt-2">
+              <CallConversation speakers={call.speakers} transcript={call.transcript} />
+            </div>
           </td>
         </tr>
       ) : null}
