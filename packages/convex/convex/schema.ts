@@ -51,6 +51,11 @@ export default defineSchema({
     final_rate: v.optional(v.number()),
     started_at: v.string(),
     ended_at: v.optional(v.string()),
+    // Diagnostic fields the classify worker fills in from the HR runs
+    // API. They let us debug prod failures via Convex CLI alone, without
+    // needing SigNoz access.
+    run_id: v.optional(v.string()),
+    hr_run_fetched: v.optional(v.boolean()),
   })
     .index('by_call_id', ['call_id'])
     .index('by_started_at', ['started_at'])

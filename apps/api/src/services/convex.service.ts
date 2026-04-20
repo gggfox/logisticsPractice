@@ -81,6 +81,8 @@ export const convexService = {
       final_rate?: number
       started_at: string
       ended_at?: string
+      run_id?: string
+      hr_run_fetched?: boolean
     }) => getClient().mutation(api.calls.create, call),
 
     updateOutcome: (params: {
