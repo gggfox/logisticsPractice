@@ -10,7 +10,7 @@ import {
   getRedisConnection,
 } from '../queues/index.js'
 import { convexService } from '../services/convex.service.js'
-import { getCallRun } from '../services/happyrobot.service.js'
+import { getRun } from '../services/happyrobot.service.js'
 
 const SENTIMENT_SIGNALS: Record<Sentiment, string[]> = {
   positive: [
@@ -86,8 +86,12 @@ function analyzeSentiment(transcript: string): { sentiment: Sentiment; confidenc
 
 /**
  * Resolve the transcript for a sentiment job, preferring the webhook payload
- * and falling back to `GET /api/v1/calls/:id` on HappyRobot. `source` is
- * reported on the wide event so the "no transcript" skip is debuggable.
+ * and falling back to `GET /api/v1/runs/:run_id` on HappyRobot. `source`
+ * is reported on the wide event so the "no transcript" skip is debuggable.
+ *
+ * The HR lookup is keyed by `run_id` (what the platform API actually
+ * accepts), not `call_id` / `session_id`; when `run_id` is absent we
+ * skip the lookup and emit `source: 'none'`.
  */
 async function resolveSentimentTranscript(data: AnalyzeSentimentInput): Promise<{
   transcript: string
@@ -96,11 +100,14 @@ async function resolveSentimentTranscript(data: AnalyzeSentimentInput): Promise<
   if (data.transcript && data.transcript.length > 0) {
     return { transcript: data.transcript, source: 'webhook' }
   }
-  if (data.call_id === 'unknown') {
+  if (data.run_id === undefined) {
     return { transcript: '', source: 'none' }
   }
-  const run = await getCallRun(data.call_id).catch((err) => {
-    logger.warn({ call_id: data.call_id, err }, 'happyrobot getCallRun failed in sentiment worker')
+  const run = await getRun(data.run_id).catch((err) => {
+    logger.warn(
+      { run_id: data.run_id, call_id: data.call_id, err },
+      'happyrobot getRun failed in sentiment worker',
+    )
     return null
   })
   if (run && run.transcript.length > 0) {

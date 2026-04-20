@@ -172,6 +172,10 @@ const callCompletedRoute: FastifyPluginAsync = async (app) => {
             'classify',
             {
               call_id,
+              // `call_id` stays bound to `session_id` for Convex correlation
+              // with negotiate_offer rows. `run_id` is what HR's
+              // `/api/v1/runs/:run_id` lookup actually wants.
+              run_id: envelope.run_id,
               carrier_mc,
               load_id,
               transcript,
@@ -186,6 +190,7 @@ const callCompletedRoute: FastifyPluginAsync = async (app) => {
           ),
           getAnalyzeSentimentQueue().add('sentiment', {
             call_id,
+            run_id: envelope.run_id,
             transcript,
           }),
         ])

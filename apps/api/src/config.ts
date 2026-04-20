@@ -40,7 +40,7 @@ const EnvSchema = z.object({
 
   // HappyRobot
   HAPPYROBOT_API_KEY: requiredString('HAPPYROBOT_API_KEY'),
-  HAPPYROBOT_BASE_URL: optionalStringWithDefault('https://api.happyrobot.ai'),
+  HAPPYROBOT_BASE_URL: optionalStringWithDefault('https://platform.happyrobot.ai'),
 
   // Bridge API security
   BRIDGE_API_KEY: requiredString('BRIDGE_API_KEY'),

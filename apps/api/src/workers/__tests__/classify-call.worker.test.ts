@@ -5,6 +5,7 @@ import { mergeRunIntoInput, outcomeFromHrTag } from '../classify-call.worker.js'
 
 const baseInput: ClassifyCallInput = {
   call_id: 'sess-1',
+  run_id: 'run-1',
   started_at: '2026-04-20T02:00:00.000Z',
   ended_at: '2026-04-20T02:10:00.000Z',
   status: 'completed',
