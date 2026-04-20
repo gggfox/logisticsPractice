@@ -10,6 +10,7 @@ import { bookingOutcomeCounter, negotiationRoundsHistogram } from '../../observa
 import { enrichWideEvent } from '../../observability/wide-event-store.js'
 import { convexService } from '../../services/convex.service.js'
 import { ErrorBodySchema } from '../_error-schema.js'
+import { CONVEX_ID_PATTERN, isUnresolvedTemplate } from './_call-id.js'
 
 export function calculateCounterOffer(
   loadboardRate: number,
@@ -20,17 +21,6 @@ export function calculateCounterOffer(
   const concessionFactor = 0.3 + round * 0.15
   return Math.round(loadboardRate - gap * concessionFactor)
 }
-
-// Convex auto-generated document ids are 32 lowercase-alphanumeric chars
-// (e.g. `jd7day0t03gks4kasqj0vzkyy5852bbt`). Real HappyRobot session ids
-// are RFC 4122 UUIDs with hyphens, so a `call_id` that matches this
-// pattern is almost certainly the workflow templating a Convex `_id`
-// (typically the row returned by `GET /api/v1/loads/:load_id`) instead
-// of `@session_id`. The rows still process so an in-flight call is not
-// dropped, but the wide event records the mismatch so the workflow bug
-// surfaces in SigNoz before the dashboard stops joining calls to
-// negotiations.
-const CONVEX_ID_PATTERN = /^[a-z0-9]{32}$/
 
 const logOfferRoute: FastifyPluginAsync = async (app) => {
   app.withTypeProvider<ZodTypeProvider>().post(
@@ -52,7 +42,21 @@ const logOfferRoute: FastifyPluginAsync = async (app) => {
       const { call_id, load_id, carrier_mc, offered_rate } = req.body
       enrichWideEvent(req, { call_id, load_id, carrier_mc, offered_rate })
 
-      if (CONVEX_ID_PATTERN.test(call_id)) {
+      if (isUnresolvedTemplate(call_id)) {
+        // Keep processing the negotiation -- dropping the request here
+        // would silently hang an in-flight call. The wide-event tag is
+        // the alert: SigNoz can flag any offer where `call_id` is raw
+        // template text so the workflow gets fixed before the call
+        // history accumulates orphan rows.
+        enrichWideEvent(req, {
+          call_id_is_template_literal: true,
+          failure_stage: 'template_substitution',
+        })
+        req.log.warn(
+          { call_id, load_id, carrier_mc },
+          'call_id is raw template text (e.g. `@session_id`); the HappyRobot workflow referenced a variable that does not resolve. Offer is still processed but rows cannot join the call-completed webhook.',
+        )
+      } else if (CONVEX_ID_PATTERN.test(call_id)) {
         enrichWideEvent(req, { call_id_looks_like_convex_id: true })
         req.log.warn(
           { call_id, load_id },

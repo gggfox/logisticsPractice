@@ -1,5 +1,6 @@
 import { MAX_NEGOTIATION_ROUNDS, OFFER_ACCEPT_MARGIN_PERCENT } from '@carrier-sales/shared'
 import { describe, expect, it } from 'vitest'
+import { isUnresolvedTemplate } from '../_call-id.js'
 
 function calculateCounterOffer(loadboardRate: number, offeredRate: number, round: number): number {
   const gap = loadboardRate - offeredRate
@@ -65,5 +66,28 @@ describe('isAcceptable', () => {
 describe('negotiation round limits', () => {
   it('MAX_NEGOTIATION_ROUNDS is 3', () => {
     expect(MAX_NEGOTIATION_ROUNDS).toBe(3)
+  })
+})
+
+describe('isUnresolvedTemplate', () => {
+  it.each([
+    ['@session_id', true],
+    ['@mc_number', true],
+    ['{{session_id}}', true],
+    [':call_id', true],
+    ['call_{{id}}', true],
+    ['session_id_}', true],
+  ])('flags raw template text %p', (input, expected) => {
+    expect(isUnresolvedTemplate(input)).toBe(expected)
+  })
+
+  it.each([
+    ['e7ec34fb-261d-4e32-9e02-c8f4950e20cb'],
+    ['19300ab9-7e6d-41a9-a8aa-bb3fcf5c0d3f'],
+    ['jd7day0t03gks4kasqj0vzkyy5852bbt'],
+    ['user-session'],
+    ['LOAD-1001'],
+  ])('does not flag resolved value %p', (input) => {
+    expect(isUnresolvedTemplate(input)).toBe(false)
   })
 })

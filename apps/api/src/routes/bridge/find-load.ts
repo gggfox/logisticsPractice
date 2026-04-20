@@ -3,6 +3,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod'
 import { z } from 'zod'
 import { enrichWideEvent } from '../../observability/wide-event-store.js'
 import { convexService } from '../../services/convex.service.js'
+import { isUnresolvedTemplate } from './_call-id.js'
 
 const ParamsSchema = z.object({
   load_id: z.string().min(1),
@@ -33,7 +34,7 @@ const findLoadRoute: FastifyPluginAsync = async (app) => {
       // template string has a configuration bug, not a missing row. A 400
       // surfaces that bug immediately instead of masquerading as a 404 --
       // an ops hint on the wide event points at what to fix.
-      if (/^[@{:]/.test(load_id) || /[@{}]/.test(load_id)) {
+      if (isUnresolvedTemplate(load_id)) {
         enrichWideEvent(req, {
           template_unresolved: true,
           failure_stage: 'template_substitution',

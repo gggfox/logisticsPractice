@@ -120,6 +120,16 @@ const callCompletedRoute: FastifyPluginAsync = async (app) => {
               .sort((a, b) => a.localeCompare(b))
               .join(',')
           : undefined,
+        // The `session.status_changed` envelope often arrives with
+        // `carrier_mc` undefined; surfacing the `vars` keys lets us
+        // see whether HappyRobot stored `mc_number` / `carrier_mc` at
+        // all, and under which name. Low-cardinality because the
+        // workflow's variable shape is sender-stable.
+        vars_keys:
+          Object.keys(vars)
+            .sort((a, b) => a.localeCompare(b))
+            .join(',') || undefined,
+        has_extracted_data: extracted_data !== undefined,
       })
       webhookReceivedCounter.add(1, {
         signature_state: signatureState,
