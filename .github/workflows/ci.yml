@@ -61,6 +61,17 @@ jobs:
   test-unit:
     name: Unit Tests
     runs-on: ubuntu-latest
+    # `apps/api/src/config.ts` parses `process.env` at module load and throws
+    # when required vars are missing. Any test that imports a service or the
+    # logger transitively imports `config.ts`, so CI needs stub values. These
+    # are placeholders with no real credentials -- unit tests mock the outbound
+    # HTTP calls and never reach the live services.
+    env:
+      CONVEX_URL: https://example.convex.cloud
+      HAPPYROBOT_API_KEY: ci-stub-happyrobot
+      BRIDGE_API_KEY: ci-stub-bridge
+      ADMIN_API_KEY: ci-stub-admin
+      FMCSA_WEB_KEY: ci-stub-fmcsa
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -82,6 +93,12 @@ jobs:
   test-e2e:
     name: E2E Tests
     runs-on: ubuntu-latest
+    # Vite inlines `VITE_CONVEX_URL` at build time, and `apps/dashboard/src/config.ts`
+    # throws a hard error when it's missing. Provide a stub URL so the bundle can
+    # load even though no backend is reachable -- the E2E suite is scoped to the
+    # static shell (sidebar, nav, dark mode) and does not exercise Convex queries.
+    env:
+      VITE_CONVEX_URL: https://example.convex.cloud
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4

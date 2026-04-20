@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { HappyRobotCallRunSchema, normalizeCallRun } from '../happyrobot.service.js'
+import {
+  HappyRobotCallRunSchema,
+  HappyRobotRunResponseSchema,
+  normalizeCallRun,
+  normalizeRun,
+} from '../happyrobot.service.js'
 
 describe('HappyRobotCallRunSchema', () => {
   it('parses the full documented shape', () => {
@@ -121,5 +126,108 @@ describe('normalizeCallRun', () => {
       { role: 'agent', text: 'hi' },
       { role: 'carrier', text: 'hey' },
     ])
+  })
+})
+
+describe('normalizeRun — events-shape from /api/v1/runs/:run_id', () => {
+  it('pulls classification tag off an AI-Classify event when top-level is absent', () => {
+    const normalized = normalizeRun(
+      HappyRobotRunResponseSchema.parse({
+        id: 'run-abc',
+        session_id: 'sess-1',
+        events: [
+          { name: 'Inbound Voice Agent', data: { transcript: 'agent: hi\ncarrier: hey' } },
+          { name: 'Classify', data: { tag: 'Success' } },
+        ],
+      }),
+    )
+    expect(normalized.classification).toStrictEqual({ tag: 'Success' })
+    expect(normalized.transcript).toBe('agent: hi\ncarrier: hey')
+  })
+
+  it('pulls extraction off an Extract event when top-level is absent', () => {
+    const normalized = normalizeRun(
+      HappyRobotRunResponseSchema.parse({
+        events: [
+          {
+            name: 'AI Extract',
+            data: { mc_number: '264184', reference_number: 'LOAD-1004' },
+          },
+        ],
+      }),
+    )
+    expect(normalized.extraction.mc_number).toBe('264184')
+    expect(normalized.extraction.reference_number).toBe('LOAD-1004')
+  })
+
+  it('reads voice agent speakers/transcript from an event payload', () => {
+    const normalized = normalizeRun(
+      HappyRobotRunResponseSchema.parse({
+        events: [
+          {
+            name: 'Voice Agent',
+            data: {
+              speakers: [
+                { role: 'agent', text: 'hi' },
+                { role: 'carrier', text: 'hey' },
+              ],
+            },
+          },
+        ],
+      }),
+    )
+    expect(normalized.speakers).toStrictEqual([
+      { role: 'agent', text: 'hi' },
+      { role: 'carrier', text: 'hey' },
+    ])
+    expect(normalized.transcript).toBe('agent: hi\ncarrier: hey')
+  })
+
+  it('prefers top-level fields over event payloads when both are present', () => {
+    const normalized = normalizeRun(
+      HappyRobotRunResponseSchema.parse({
+        transcript: 'from top-level',
+        classification: { tag: 'Rate too high' },
+        extraction: { mc_number: 'top' },
+        events: [
+          { name: 'Voice Agent', data: { transcript: 'from event' } },
+          { name: 'Classify', data: { tag: 'Success' } },
+          { name: 'Extract', data: { mc_number: 'event' } },
+        ],
+      }),
+    )
+    expect(normalized.transcript).toBe('from top-level')
+    expect(normalized.classification).toStrictEqual({ tag: 'Rate too high' })
+    expect(normalized.extraction.mc_number).toBe('top')
+  })
+
+  it('falls back to the aggregate `output` map for classification and extraction', () => {
+    const normalized = normalizeRun(
+      HappyRobotRunResponseSchema.parse({
+        output: {
+          classification_tag: 'Not interested',
+          mc_number: '264184',
+        },
+      }),
+    )
+    expect(normalized.classification).toStrictEqual({ tag: 'Not interested' })
+    expect(normalized.extraction.mc_number).toBe('264184')
+  })
+
+  it('accepts an empty events array without throwing', () => {
+    expect(() => HappyRobotRunResponseSchema.parse({ events: [] })).not.toThrow()
+    const normalized = normalizeRun(HappyRobotRunResponseSchema.parse({ events: [] }))
+    expect(normalized.transcript).toBe('')
+    expect(normalized.classification).toBeUndefined()
+    expect(normalized.extraction).toStrictEqual({})
+  })
+
+  it('matches event names case-insensitively and tolerates whitespace', () => {
+    const normalized = normalizeRun(
+      HappyRobotRunResponseSchema.parse({
+        events: [{ name: '  ai-classify  ', data: { tag: 'Success' } }],
+      }),
+    )
+    expect(normalized.classification).toStrictEqual({ tag: 'Success' })
   })
 })

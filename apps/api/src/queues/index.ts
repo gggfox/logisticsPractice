@@ -76,6 +76,11 @@ const classifyQueueOptions = (): QueueOptions => ({
 
 export const ClassifyCallInputSchema = z.object({
   call_id: z.string(),
+  // HR's `session.status_changed` envelope carries BOTH `session_id`
+  // (correlation key with `/api/v1/offers`, stored as `call_id`) and
+  // `run_id` (the key HR's `/api/v1/runs/:run_id` API expects).
+  // Optional so flat-shape webhook fixtures and pre-rollout jobs still parse.
+  run_id: z.string().optional(),
   carrier_mc: z.string().optional(),
   load_id: z.string().optional(),
   transcript: z.string().optional(),
@@ -90,6 +95,7 @@ export type ClassifyCallInput = z.infer<typeof ClassifyCallInputSchema>
 
 export const AnalyzeSentimentInputSchema = z.object({
   call_id: z.string(),
+  run_id: z.string().optional(),
   transcript: z.string().optional(),
 })
 export type AnalyzeSentimentInput = z.infer<typeof AnalyzeSentimentInputSchema>

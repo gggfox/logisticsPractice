@@ -64,7 +64,7 @@ In the Dokploy UI:
    # headers, so `x-api-key` is the only auth gate in the common case.
    # WEBHOOK_SECRET=...
    HAPPYROBOT_API_KEY=...
-   HAPPYROBOT_BASE_URL=https://api.happyrobot.ai
+   HAPPYROBOT_BASE_URL=https://platform.happyrobot.ai
 
    # Required by BullMQ producers + workers
    REDIS_URL=redis://redis:6379

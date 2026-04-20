@@ -10,7 +10,7 @@ import {
   getRedisConnection,
 } from '../queues/index.js'
 import { convexService } from '../services/convex.service.js'
-import { type HappyRobotCallRun, getCallRun } from '../services/happyrobot.service.js'
+import { type HappyRobotCallRun, getRun } from '../services/happyrobot.service.js'
 
 /**
  * Map HR's AI-Classify tag onto our internal `CallOutcome` enum. HR's tag
@@ -159,11 +159,19 @@ export function createClassifyCallWorker(): Worker<ClassifyCallInput> {
           // and AI-Classify tag that the `session.status_changed` envelope
           // never carries. Swallow errors: classify must still write a row
           // even if HR is down.
+          //
+          // HR's `/api/v1/runs/:run_id` is keyed by `run_id`, not
+          // `session_id`. Skip the lookup when `run_id` is absent (older
+          // enqueued jobs from before this field was added, or flat-shape
+          // test payloads) and rely on webhook data alone.
           const run =
-            data.call_id === 'unknown'
+            data.run_id === undefined
               ? null
-              : await getCallRun(data.call_id).catch((err) => {
-                  logger.warn({ call_id: data.call_id, err }, 'happyrobot getCallRun failed')
+              : await getRun(data.run_id).catch((err) => {
+                  logger.warn(
+                    { run_id: data.run_id, call_id: data.call_id, err },
+                    'happyrobot getRun failed',
+                  )
                   return null
                 })
 
@@ -172,6 +180,8 @@ export function createClassifyCallWorker(): Worker<ClassifyCallInput> {
 
           enrich({
             call_id: data.call_id,
+            run_id: data.run_id,
+            has_run_id: data.run_id !== undefined,
             carrier_mc: merged.carrier_mc,
             load_id: merged.load_id,
             call_status: data.status,

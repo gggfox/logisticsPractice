@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { type ReactElement, useEffect, useState } from 'react'
 import { Toaster } from 'sonner'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { Sidebar } from './components/Sidebar'
@@ -12,7 +12,7 @@ import { OverviewPage } from './pages/OverviewPage'
 
 type Page = 'overview' | 'live' | 'calls' | 'loads' | 'carriers' | 'negotiations'
 
-const pages: Record<Page, () => JSX.Element> = {
+const pages: Record<Page, () => ReactElement> = {
   overview: OverviewPage,
   live: LiveFeedPage,
   calls: CallHistoryPage,
