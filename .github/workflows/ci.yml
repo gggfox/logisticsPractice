@@ -82,6 +82,12 @@ jobs:
   test-e2e:
     name: E2E Tests
     runs-on: ubuntu-latest
+    # Vite inlines `VITE_CONVEX_URL` at build time, and `apps/dashboard/src/config.ts`
+    # throws a hard error when it's missing. Provide a stub URL so the bundle can
+    # load even though no backend is reachable -- the E2E suite is scoped to the
+    # static shell (sidebar, nav, dark mode) and does not exercise Convex queries.
+    env:
+      VITE_CONVEX_URL: https://example.convex.cloud
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4

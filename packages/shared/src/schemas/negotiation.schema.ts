@@ -13,8 +13,14 @@ export const NegotiationRoundSchema = z.object({
 export type NegotiationRound = z.infer<typeof NegotiationRoundSchema>
 
 export const OfferRequestSchema = z.object({
-  call_id: z.coerce.string().min(1),
-  load_id: z.coerce.string().min(1),
+  // `call_id` and `load_id` are string-typed in every HR payload we've
+  // seen; do NOT wrap them in `z.coerce.string()` because `String(undefined)`
+  // is the literal `"undefined"`, which passes `.min(1)` and silently
+  // forwards missing values to the server. `carrier_mc` stays coerced
+  // because HR's `negotiate_offer` webhook sends it as an unquoted
+  // JSON number (e.g. `"carrier_mc": 264184`).
+  call_id: z.string().min(1),
+  load_id: z.string().min(1),
   carrier_mc: z.coerce.string().min(1),
   offered_rate: z.coerce.number().positive(),
 })
