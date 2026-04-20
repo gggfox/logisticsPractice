@@ -9,8 +9,33 @@
  * See docs/observability.md for the contract and field conventions.
  */
 
-import { trace } from '@opentelemetry/api'
+import { type Attributes, trace } from '@opentelemetry/api'
 import { config } from '../config.js'
+
+const SPAN_MIRROR_SKIP = new Set<string>([
+  'timestamp',
+  'trace_id',
+  'service',
+  'service_version',
+  'service_namespace',
+  'deployment_region',
+  'transcript',
+  'error',
+])
+
+function mirrorFieldsToActiveSpan(fields: Record<string, unknown>): void {
+  const span = trace.getActiveSpan()
+  if (!span) return
+  const attrs: Attributes = {}
+  for (const [key, value] of Object.entries(fields)) {
+    if (SPAN_MIRROR_SKIP.has(key)) continue
+    if (value === null || value === undefined) continue
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+      attrs[`app.${key}`] = value
+    }
+  }
+  if (Object.keys(attrs).length > 0) span.setAttributes(attrs)
+}
 
 type LoggerLike = {
   info: (meta: Record<string, unknown>, msg?: string) => void
@@ -148,6 +173,7 @@ export async function withWideEvent<T>(
   const event = createWideEvent(stepName, deps.seed ?? {})
   const enrich = (fields: Record<string, unknown>): void => {
     Object.assign(event, fields)
+    mirrorFieldsToActiveSpan(fields)
   }
 
   try {

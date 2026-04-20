@@ -37,8 +37,18 @@ RUN pnpm --filter @carrier-sales/api deploy --prod --legacy /prod/api
 # ---------- runner ----------
 FROM node:22-alpine AS runner
 
+# Dokploy injects DOKPLOY_COMMIT_SHA at build time. Wiring it in via an
+# explicit --build-arg avoids the "literal ${DOKPLOY_COMMIT_SHA}" trap:
+# runtime env files (including Dokploy's Env tab) don't expand `${VAR}`
+# syntax, so SERVICE_VERSION="${DOKPLOY_COMMIT_SHA}" persisted as a literal
+# string on every span/log. Baking it as an image env makes it observable
+# even when the runtime env forgets to set it, and Dokploy's Env tab can
+# still override SERVICE_VERSION for ad-hoc deploys.
+ARG GIT_COMMIT_SHA=unknown
+
 ENV NODE_ENV=production \
-    NPM_CONFIG_UPDATE_NOTIFIER=false
+    NPM_CONFIG_UPDATE_NOTIFIER=false \
+    SERVICE_VERSION=${GIT_COMMIT_SHA}
 
 RUN apk add --no-cache wget tini && \
     addgroup -S -g 1001 appgroup && \
@@ -65,4 +75,5 @@ ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["node", "--enable-source-maps", "dist/server.js"]
 
 LABEL org.opencontainers.image.title="Carrier Sales API" \
-      org.opencontainers.image.description="Fastify Bridge API for HappyRobot carrier sales automation"
+      org.opencontainers.image.description="Fastify Bridge API for HappyRobot carrier sales automation" \
+      org.opencontainers.image.revision="${GIT_COMMIT_SHA}"

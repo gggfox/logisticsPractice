@@ -28,6 +28,23 @@ const findLoadRoute: FastifyPluginAsync = async (app) => {
       const { load_id } = req.params
       enrichWideEvent(req, { load_id })
 
+      // Defensive short-circuit: an upstream caller (e.g. HappyRobot) that
+      // ships a literal `@reference_number` / `{{load_id}}` / `:load_id`
+      // template string has a configuration bug, not a missing row. A 400
+      // surfaces that bug immediately instead of masquerading as a 404 --
+      // an ops hint on the wide event points at what to fix.
+      if (/^[@{:]/.test(load_id) || /[@{}]/.test(load_id)) {
+        enrichWideEvent(req, {
+          template_unresolved: true,
+          failure_stage: 'template_substitution',
+        })
+        return reply.code(400).send({
+          error: 'Bad Request',
+          message: `Load id "${load_id}" looks like an unsubstituted template variable. The caller likely sent the template text instead of a resolved value.`,
+          statusCode: 400,
+        })
+      }
+
       try {
         const load = await convexService.loads.getByLoadId(load_id)
         enrichWideEvent(req, { found: load != null })

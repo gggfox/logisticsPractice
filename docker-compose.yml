@@ -3,6 +3,12 @@ services:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
+      args:
+        # Dokploy exposes DOKPLOY_COMMIT_SHA at build time; fall back to
+        # "unknown" for local builds. The resulting SHA is baked into
+        # SERVICE_VERSION so SigNoz spans/logs show the actual deployed
+        # commit instead of the literal `${DOKPLOY_COMMIT_SHA}` string.
+        GIT_COMMIT_SHA: ${DOKPLOY_COMMIT_SHA:-unknown}
     ports:
       - "3111:3111"
       - "3112:3112"
