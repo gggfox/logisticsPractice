@@ -17,7 +17,14 @@
     },
     "test": {
       "dependsOn": ["^build"],
-      "outputs": ["coverage/**"]
+      "outputs": ["coverage/**"],
+      "passThroughEnv": [
+        "CONVEX_URL",
+        "HAPPYROBOT_API_KEY",
+        "BRIDGE_API_KEY",
+        "ADMIN_API_KEY",
+        "FMCSA_WEB_KEY"
+      ]
     },
     "test:e2e": {
       "dependsOn": ["build"]
