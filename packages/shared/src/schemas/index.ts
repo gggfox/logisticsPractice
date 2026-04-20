@@ -31,9 +31,13 @@ export {
   NegotiationRoundSchema,
   OfferRequestSchema,
   OfferResponseSchema,
+  BookLoadRequestSchema,
+  BookLoadResponseSchema,
   type NegotiationRound,
   type OfferRequest,
   type OfferResponse,
+  type BookLoadRequest,
+  type BookLoadResponse,
 } from './negotiation.schema.js'
 
 export {

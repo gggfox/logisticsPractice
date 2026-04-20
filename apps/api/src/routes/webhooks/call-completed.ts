@@ -161,19 +161,29 @@ const callCompletedRoute: FastifyPluginAsync = async (app) => {
       try {
         // Fan-out: BullMQ workers sharing a queue name compete, so publish
         // to two topics (classify + sentiment) for parallel processing.
+        // The classify job is delayed 3s so the first attempt doesn't race
+        // HappyRobot's Extract node -- HR's extraction lands in the
+        // `calls/:id` run view a beat after `status_changed: completed`
+        // fires, and starting without the extraction forces every call
+        // through at least one retry. Sentiment runs immediately because
+        // it works off the webhook transcript alone.
         await Promise.all([
-          getClassifyCallQueue().add('classify', {
-            call_id,
-            carrier_mc,
-            load_id,
-            transcript,
-            speakers,
-            duration_seconds,
-            started_at,
-            ended_at: ended_at ?? started_at,
-            status,
-            extracted_data,
-          }),
+          getClassifyCallQueue().add(
+            'classify',
+            {
+              call_id,
+              carrier_mc,
+              load_id,
+              transcript,
+              speakers,
+              duration_seconds,
+              started_at,
+              ended_at: ended_at ?? started_at,
+              status,
+              extracted_data,
+            },
+            { delay: 3_000 },
+          ),
           getAnalyzeSentimentQueue().add('sentiment', {
             call_id,
             transcript,

@@ -210,13 +210,19 @@ it is already in @mc_number from step 3.
   "We can do $<counter_offer> for this load. The posted rate is
    $<loadboard_rate>."
 - When the tool returns max_rounds_reached = true, deliver the final counter
-  and tell the caller this is our best and final offer. If they still decline,
-  thank them and end the call.
+  and tell the caller this is our best and final offer.
+  - If the caller accepts the final counter, call the book_load tool with
+    load_id = @load_id and agreed_rate = that final counter value. The
+    server will confirm the booking and update the load. Then move to
+    transfer (step 6).
+  - If the caller still declines, thank them and end the call. Do NOT call
+    book_load.
 
 Never make up a number — always use the tool.
 
 ## 6. Transfer on agreement
-When a price is agreed, call the transfer_to_sales tool. The tool plays:
+When a price is agreed (either an early accepted = true, or book_load returned
+booked = true after max rounds), call the transfer_to_sales tool. The tool plays:
   "Transfer was successful and now you can wrap up the conversation."
 After the tool runs, thank the caller and end the call.
 
@@ -241,6 +247,13 @@ node that hits the Bridge API. All webhooks use `x-api-key: {BRIDGE_API_KEY}` an
 `No Auth` in the Webhook authentication field (we authenticate via header, not a built-in
 method). Set **Error Handling → Gracefully handle 5XX errors** off so the agent retries a
 tool if the API briefly fails.
+
+**Call-correlation header.** Every webhook that writes a `call_id`-scoped row (offers,
+bookings) must send `X-Happyrobot-Session-Id: @session_id` in addition to `x-api-key`. The
+API reads this header first, falling back to the request body `call_id` only when it is not
+raw template text (`@session_id`) and not a Convex document id. This avoids the failure
+mode where the LLM invents a `call_id` body value and correlation drops on the server. See
+`apps/api/src/routes/bridge/_call-id.ts`.
 
 Variables from tool parameters are referenced in child nodes with `@<param_name>`.
 

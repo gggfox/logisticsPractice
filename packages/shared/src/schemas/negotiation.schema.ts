@@ -30,3 +30,25 @@ export const OfferResponseSchema = z.object({
 })
 
 export type OfferResponse = z.infer<typeof OfferResponseSchema>
+
+// Booking confirmation. Used by the `book_load` HR tool after the caller
+// accepts a counter that came back from `negotiate_offer` with
+// `max_rounds_reached: true` -- the negotiation round ledger is already
+// final, this endpoint just flips `loads.status -> 'booked'` and seeds
+// the `calls` row with the agreed rate.
+export const BookLoadRequestSchema = z.object({
+  agreed_rate: z.coerce.number().positive(),
+})
+
+export type BookLoadRequest = z.infer<typeof BookLoadRequestSchema>
+
+export const BookLoadResponseSchema = z.object({
+  booked: z.boolean(),
+  load_id: z.string().min(1),
+  call_id: z.string().min(1),
+  agreed_rate: z.number().positive(),
+  loadboard_rate: z.number().positive(),
+  message: z.string(),
+})
+
+export type BookLoadResponse = z.infer<typeof BookLoadResponseSchema>

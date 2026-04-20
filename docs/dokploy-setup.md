@@ -75,10 +75,18 @@ In the Dokploy UI:
    OTEL_ENABLED=true
    OTEL_EXPORTER_OTLP_ENDPOINT=http://signoz-otel-collector:4318
    OTEL_SERVICE_NAME=carrier-sales-api
-   SERVICE_VERSION=${DOKPLOY_COMMIT_SHA}
    SERVICE_NAMESPACE=production
    DEPLOYMENT_REGION=hostinger-eu
    ```
+   > **Do not set `SERVICE_VERSION` here.** Dokploy's Env tab does **not**
+   > expand `${VAR}` syntax, so `SERVICE_VERSION=${DOKPLOY_COMMIT_SHA}`
+   > would persist as the literal string `"${DOKPLOY_COMMIT_SHA}"` on
+   > every span and log. The [API Dockerfile](../apps/api/Dockerfile)
+   > already bakes the commit SHA into the image at build time via the
+   > `GIT_COMMIT_SHA` build-arg (which [docker-compose.yml](../docker-compose.yml)
+   > populates from Dokploy's `DOKPLOY_COMMIT_SHA`). Omit `SERVICE_VERSION`
+   > from the Env tab; only set it explicitly when you want to override
+   > the baked-in value with a human-readable tag for an ad-hoc deploy.
 7. **Domains**:
    - Host: `api.<yourdomain>`
    - Path: `/`
