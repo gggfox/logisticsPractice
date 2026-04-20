@@ -61,6 +61,8 @@ export const create = mutation({
     final_rate: v.optional(v.number()),
     started_at: v.string(),
     ended_at: v.optional(v.string()),
+    run_id: v.optional(v.string()),
+    hr_run_fetched: v.optional(v.boolean()),
   },
   // Upsert by `call_id`: HappyRobot re-delivers webhooks and the two
   // workers (classify + sentiment) race on the same row. Patch on hit

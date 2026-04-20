@@ -248,6 +248,11 @@ export function createClassifyCallWorker(): Worker<ClassifyCallInput> {
             started_at: data.started_at,
             ended_at: data.ended_at,
             duration_seconds: merged.duration_seconds,
+            // Persist the exact HR identifiers + backfill outcome so prod
+            // failures are debuggable via `npx convex run calls:getByCallId`
+            // alone -- without requiring SigNoz UI or Dokploy log access.
+            run_id: data.run_id,
+            hr_run_fetched: merged.hr_run_fetched,
           })
 
           callOutcomeCounter.add(1, { outcome })

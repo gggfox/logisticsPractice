@@ -21,6 +21,14 @@ export const CallSchema = z.object({
   final_rate: z.number().positive().optional(),
   started_at: z.string().datetime(),
   ended_at: z.string().datetime().optional(),
+  // Diagnostic fields persisted by the classify worker so prod failures
+  // are debuggable via `npx convex run calls:getByCallId ...` without
+  // SigNoz access. `run_id` is the HR-side run the worker attempted to
+  // backfill from; `hr_run_fetched` reflects whether `/api/v1/runs/:run_id`
+  // returned a usable payload. Both are optional -- rows written before
+  // this field landed, or via `upsertFromOffer`, leave them undefined.
+  run_id: z.string().optional(),
+  hr_run_fetched: z.boolean().optional(),
 })
 
 export type Call = z.infer<typeof CallSchema>
