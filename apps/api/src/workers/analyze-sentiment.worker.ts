@@ -10,6 +10,7 @@ import {
   getRedisConnection,
 } from '../queues/index.js'
 import { convexService } from '../services/convex.service.js'
+import { getCallRun } from '../services/happyrobot.service.js'
 
 const SENTIMENT_SIGNALS: Record<Sentiment, string[]> = {
   positive: [
@@ -83,6 +84,31 @@ function analyzeSentiment(transcript: string): { sentiment: Sentiment; confidenc
   }
 }
 
+/**
+ * Resolve the transcript for a sentiment job, preferring the webhook payload
+ * and falling back to `GET /api/v1/calls/:id` on HappyRobot. `source` is
+ * reported on the wide event so the "no transcript" skip is debuggable.
+ */
+async function resolveSentimentTranscript(data: AnalyzeSentimentInput): Promise<{
+  transcript: string
+  source: 'webhook' | 'hr_api' | 'none'
+}> {
+  if (data.transcript && data.transcript.length > 0) {
+    return { transcript: data.transcript, source: 'webhook' }
+  }
+  if (data.call_id === 'unknown') {
+    return { transcript: '', source: 'none' }
+  }
+  const run = await getCallRun(data.call_id).catch((err) => {
+    logger.warn({ call_id: data.call_id, err }, 'happyrobot getCallRun failed in sentiment worker')
+    return null
+  })
+  if (run && run.transcript.length > 0) {
+    return { transcript: run.transcript, source: 'hr_api' }
+  }
+  return { transcript: '', source: 'none' }
+}
+
 export function createAnalyzeSentimentWorker(): Worker<AnalyzeSentimentInput> {
   const worker = new Worker<AnalyzeSentimentInput>(
     QUEUE_NAMES.analyzeSentiment,
@@ -93,18 +119,23 @@ export function createAnalyzeSentimentWorker(): Worker<AnalyzeSentimentInput> {
         'AnalyzeSentiment',
         { logger, seed: { trigger_type: 'queue', trigger_topic: QUEUE_NAMES.analyzeSentiment } },
         async (enrich) => {
+          const { transcript, source: transcript_source } = await resolveSentimentTranscript(data)
+
           enrich({
             call_id: data.call_id,
-            had_transcript: Boolean(data.transcript),
-            transcript_length: data.transcript?.length ?? 0,
+            had_transcript: transcript.length > 0,
+            transcript_length: transcript.length,
+            transcript_source,
           })
 
-          if (!data.transcript) {
+          if (!transcript) {
+            // Don't stamp `neutral` on content-less rows; classify will
+            // still write the row with `outcome: 'dropped'`.
             enrich({ skipped: true, skip_reason: 'no_transcript' })
             return
           }
 
-          const { sentiment, confidence } = analyzeSentiment(data.transcript)
+          const { sentiment, confidence } = analyzeSentiment(transcript)
 
           // Patch sentiment only. The classify worker owns `outcome`;
           // when this worker lands second (or first), never overwrite it.

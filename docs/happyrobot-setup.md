@@ -391,11 +391,42 @@ signature.
 echo -n '<raw body>' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET"
 ```
 
-HappyRobot's webhooks are fired after the workflow completes; the body should include
-`call_id`, `phone_number`, `carrier_mc`, `load_id`, `transcript`, `duration_seconds`,
-`started_at`, `ended_at`, `status`, and the `extracted_data` JSON from the AI Extract
-node. See [`apps/api/requests.http`](../apps/api/requests.http) for the canonical payload
-and [`CallWebhookPayloadSchema`](../packages/shared/src/schemas/call.schema.ts) for the contract.
+HappyRobot's workflow-level webhook UI does **not** let you template a request
+body -- every delivery is the CloudEvents 1.0 `session.status_changed` envelope:
+
+```json
+{
+  "specversion": "1.0",
+  "type": "session.status_changed",
+  "time": "2026-04-20T02:34:49.485Z",
+  "data": {
+    "run_id": "...",
+    "session_id": "...",
+    "status": { "previous": "in-progress", "current": "completed", "updated_at": "..." },
+    "org": "...",
+    "use_case": "..."
+  }
+}
+```
+
+The envelope carries **no** transcript, carrier MC, load id, or AI Extract
+JSON. The API backfills those by calling `GET /api/v1/calls/:session_id`
+against HappyRobot in the classify and sentiment workers (see
+[`happyrobot.service.ts`](../apps/api/src/services/happyrobot.service.ts) →
+`getCallRun`). The classify worker records whether the backfill succeeded
+via the wide-event fields `hr_run_fetched`, `hr_classify_tag`, and
+`transcript_source: "webhook" | "hr_api" | "none"`.
+
+Webhooks that arrive without any correlation id (`data.session_id`,
+`data.run_id`, or a legacy flat `call_id`) are ACK'd 200 but skipped
+instead of writing an `unknown`/`unknown`/`dropped` row to Convex -- look
+for `skip_reason: "no_correlation_id"` on the wide event.
+
+`CallWebhookPayloadSchema` in
+[`packages/shared/src/schemas/call.schema.ts`](../packages/shared/src/schemas/call.schema.ts)
+remains permissive (every top-level field is optional) so a future HR
+workflow with a proper body template still flows through without a contract
+change.
 
 ---
 

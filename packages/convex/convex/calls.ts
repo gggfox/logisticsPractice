@@ -169,6 +169,23 @@ export const upsertFromOffer = mutation({
   },
 })
 
+// One-shot cleanup for `call_id: 'unknown'` rows. The route now skips
+// webhooks without a correlation id, but this keeps the safety valve in
+// place: running it is always safe, idempotent, and returns the deleted
+// count so dashboard users can verify. Intended to be invoked via the
+// Convex "Run function" panel; no external caller wires it up.
+export const deleteOrphans = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const rows = await ctx.db
+      .query('calls')
+      .withIndex('by_call_id', (q) => q.eq('call_id', 'unknown'))
+      .collect()
+    for (const r of rows) await ctx.db.delete(r._id)
+    return rows.length
+  },
+})
+
 // Purpose-built patch so the sentiment worker never clobbers the
 // classify worker's `outcome`. The worker race was the root cause of
 // every recent call showing `declined`.

@@ -4,6 +4,12 @@ End-to-end web-call scripts for validating the HappyRobot workflow against the
 [FDE technical challenge](../requitements.secret.md). Read each script aloud in
 the HappyRobot editor's **Preview workflow → Web call** panel.
 
+> Any seeded `LOAD-100x` works for Script A -- the math and verification
+> steps are written against `LOAD-1000`, but substituting e.g. `LOAD-1001`
+> exercises the same flow (just with different numbers from the "Seeded
+> loads reference" table below). Start with whichever load you want to
+> validate; only the dollar amounts change.
+
 The numbers below are calibrated to:
 
 - the 5 seeded loads in prod (`LOAD-1000` … `LOAD-1004`)

@@ -133,6 +133,25 @@ describe('resolveTranscript', () => {
   })
 })
 
+describe('unwrapCloudEventPayload — correlation-id skip guard', () => {
+  it('returns undefined session_id and run_id when both are missing', () => {
+    const raw = {
+      specversion: '1.0',
+      id: 'evt-no-ids',
+      type: 'session.status_changed',
+      data: {
+        status: { current: 'completed' },
+        org: 'acme',
+      },
+    }
+    const out = unwrapCloudEventPayload(raw)
+    expect(out.is_cloud_event).toBe(true)
+    expect(out.session_id).toBeUndefined()
+    expect(out.run_id).toBeUndefined()
+    expect(out.status_current).toBe('completed')
+  })
+})
+
 describe('unwrapCloudEventPayload', () => {
   it('unwraps a HappyRobot session.status_changed envelope', () => {
     const raw = {

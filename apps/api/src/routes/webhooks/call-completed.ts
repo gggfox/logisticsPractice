@@ -71,7 +71,8 @@ const callCompletedRoute: FastifyPluginAsync = async (app) => {
 
       // `negotiate_offer` in HappyRobot templates `call_id: @session_id`,
       // so prefer the envelope's `session_id` to correlate the webhook
-      // with the offer rows already written to Convex.
+      // with the offer rows already written to Convex. `'unknown'` is
+      // the sentinel for "no correlation id at all" and is caught below.
       const call_id =
         envelope.session_id ??
         envelope.run_id ??
@@ -132,6 +133,18 @@ const callCompletedRoute: FastifyPluginAsync = async (app) => {
       // and tells HappyRobot the delivery succeeded.
       if (!is_terminal) {
         enrichWideEvent(req, { enqueued: false, skip_reason: 'non_terminal_status' })
+        return { received: true as const }
+      }
+
+      // Without a correlation id we cannot backfill from HR or join this
+      // webhook against prior offer rows -- the resulting calls row would
+      // be pure noise (`call_id: 'unknown'`, empty everything). Ack 200
+      // so HR doesn't retry, but skip the Convex write.
+      if (call_id === 'unknown') {
+        // Counter already fired above for this delivery; the skip branch
+        // is observed via the wide-event `skip_reason` instead of a second
+        // counter increment to avoid double-counting the same webhook.
+        enrichWideEvent(req, { enqueued: false, skip_reason: 'no_correlation_id' })
         return { received: true as const }
       }
 
