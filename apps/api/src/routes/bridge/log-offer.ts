@@ -21,6 +21,17 @@ export function calculateCounterOffer(
   return Math.round(loadboardRate - gap * concessionFactor)
 }
 
+// Convex auto-generated document ids are 32 lowercase-alphanumeric chars
+// (e.g. `jd7day0t03gks4kasqj0vzkyy5852bbt`). Real HappyRobot session ids
+// are RFC 4122 UUIDs with hyphens, so a `call_id` that matches this
+// pattern is almost certainly the workflow templating a Convex `_id`
+// (typically the row returned by `GET /api/v1/loads/:load_id`) instead
+// of `@session_id`. The rows still process so an in-flight call is not
+// dropped, but the wide event records the mismatch so the workflow bug
+// surfaces in SigNoz before the dashboard stops joining calls to
+// negotiations.
+const CONVEX_ID_PATTERN = /^[a-z0-9]{32}$/
+
 const logOfferRoute: FastifyPluginAsync = async (app) => {
   app.withTypeProvider<ZodTypeProvider>().post(
     '/api/v1/offers',
@@ -40,6 +51,14 @@ const logOfferRoute: FastifyPluginAsync = async (app) => {
     async (req, reply) => {
       const { call_id, load_id, carrier_mc, offered_rate } = req.body
       enrichWideEvent(req, { call_id, load_id, carrier_mc, offered_rate })
+
+      if (CONVEX_ID_PATTERN.test(call_id)) {
+        enrichWideEvent(req, { call_id_looks_like_convex_id: true })
+        req.log.warn(
+          { call_id, load_id },
+          'call_id matches the Convex document id pattern; the caller is likely templating a row `_id` (e.g. from `GET /api/v1/loads/:load_id`) instead of `@session_id`',
+        )
+      }
 
       try {
         const load = await convexService.loads.getByLoadId(load_id)
