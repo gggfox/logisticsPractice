@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify'
 import seedLoadsRoute from './admin/seed-loads.js'
+import bookLoadRoute from './bridge/book-load.js'
 import findCarrierRoute from './bridge/find-carrier.js'
 import findLoadRoute from './bridge/find-load.js'
 import findLoadsRoute from './bridge/find-loads.js'
@@ -25,6 +26,7 @@ const routes: FastifyPluginAsync = async (app) => {
   await app.register(findLoadRoute)
   await app.register(findCarrierRoute)
   await app.register(logOfferRoute)
+  await app.register(bookLoadRoute)
 
   await app.register(getTranscriptRoute)
   await app.register(seedLoadsRoute)

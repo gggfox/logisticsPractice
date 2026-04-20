@@ -61,6 +61,7 @@ Web call (AI Agent trigger)
 │   Tool: find_loads          → Webhook GET loads search │
 │   Tool: find_load           → Webhook GET load by id   │
 │   Tool: negotiate_offer     → Webhook POST offer       │
+│   Tool: book_load           → Webhook POST book        │
 │   Tool: transfer_to_sales   → Fixed-message tool       │
 └────────────────────────────────────────────────────────┘
         │
@@ -71,10 +72,40 @@ AI Classify (call outcome)
 AI Extract (structured data)
 ```
 
-The current deployed workflow (`gggfox`, id `609rj199bahf`) has the full node set:
-Web call trigger, Inbound Voice Agent, Prompt, all five tools (`verify_carrier`, `find_loads`,
-`find_load`, `negotiate_offer`, `transfer_to_sales`), and the Classify + Extract tail. The
-webhook nodes should point at your deployed `{BASE_URL}` (see §5).
+The current deployed workflow (`gggfox`, id `609rj199bahf`) has the core node set:
+Web call trigger, Inbound Voice Agent, Prompt, the five original tools
+(`verify_carrier`, `find_loads`, `find_load`, `negotiate_offer`, `transfer_to_sales`),
+and the Classify + Extract tail. `book_load` (§6.5) is the newest tool — it closes the
+"caller accepts after max_rounds" path that used to drop silently. The webhook nodes
+should point at your deployed `{BASE_URL}` (see §5).
+
+### Rollout status (current draft)
+
+At the time this section was last updated, workflow `609rj199bahf` has:
+
+- **Version 2** — published. Original five tools, `negotiate_offer` webhook **without**
+  the `X-Happyrobot-Session-Id` header.
+- **Version 3** — unpublished draft, forked from Version 2 with Fix 1a applied:
+  the `negotiate_offer` POST webhook now sends `X-Happyrobot-Session-Id: @session_id`
+  as a literal template header (see §6.4). This pairs with the server-side
+  [`apps/api/src/routes/bridge/_call-id.ts`](../apps/api/src/routes/bridge/_call-id.ts)
+  and the `STRICT_CALL_ID` flag in [`apps/api/src/config.ts`](../apps/api/src/config.ts).
+
+**Operator action before publishing Version 3:**
+
+1. Add the `book_load` tool per §6.5 (HR's "Copy Tool → Enter paste mode" flow
+   could not be driven end-to-end from Playwright automation, so this step is
+   manual). Ensure the webhook carries both `x-api-key: {BRIDGE_API_KEY}` and
+   `X-Happyrobot-Session-Id: @session_id`. The server route already exists at
+   [`apps/api/src/routes/bridge/book-load.ts`](../apps/api/src/routes/bridge/book-load.ts).
+2. Update the Prompt node's §5 (Negotiation) block to the template in §5 below — it
+   now instructs the LLM to call `book_load` on `max_rounds_reached=true + caller
+   accepts`.
+3. Preview-test one full call, then click **Publish** to promote Version 3.
+
+Publishing Version 3 with only Fix 1a applied is strictly safe — the header change
+makes correlation more reliable and `STRICT_CALL_ID=false` (the default) keeps the
+server tolerant of webhooks that still omit the header.
 
 ---
 
@@ -210,13 +241,19 @@ it is already in @mc_number from step 3.
   "We can do $<counter_offer> for this load. The posted rate is
    $<loadboard_rate>."
 - When the tool returns max_rounds_reached = true, deliver the final counter
-  and tell the caller this is our best and final offer. If they still decline,
-  thank them and end the call.
+  and tell the caller this is our best and final offer.
+  - If the caller accepts the final counter, call the book_load tool with
+    load_id = @load_id and agreed_rate = that final counter value. The
+    server will confirm the booking and update the load. Then move to
+    transfer (step 6).
+  - If the caller still declines, thank them and end the call. Do NOT call
+    book_load.
 
 Never make up a number — always use the tool.
 
 ## 6. Transfer on agreement
-When a price is agreed, call the transfer_to_sales tool. The tool plays:
+When a price is agreed (either an early accepted = true, or book_load returned
+booked = true after max rounds), call the transfer_to_sales tool. The tool plays:
   "Transfer was successful and now you can wrap up the conversation."
 After the tool runs, thank the caller and end the call.
 
@@ -241,6 +278,13 @@ node that hits the Bridge API. All webhooks use `x-api-key: {BRIDGE_API_KEY}` an
 `No Auth` in the Webhook authentication field (we authenticate via header, not a built-in
 method). Set **Error Handling → Gracefully handle 5XX errors** off so the agent retries a
 tool if the API briefly fails.
+
+**Call-correlation header.** Every webhook that writes a `call_id`-scoped row (offers,
+bookings) must send `X-Happyrobot-Session-Id: @session_id` in addition to `x-api-key`. The
+API reads this header first, falling back to the request body `call_id` only when it is not
+raw template text (`@session_id`) and not a Convex document id. This avoids the failure
+mode where the LLM invents a `call_id` body value and correlation drops on the server. See
+`apps/api/src/routes/bridge/_call-id.ts`.
 
 Variables from tool parameters are referenced in child nodes with `@<param_name>`.
 
@@ -325,9 +369,38 @@ re-asking the caller. The server still enforces the field via `OfferRequestSchem
 | URL          | `{BASE_URL}/api/v1/offers`                                                                                         |
 | Content type | `application/json`                                                                                                 |
 | Body (Raw)   | `{ "call_id": "@call_id", "load_id": "@load_id", "carrier_mc": "@carrier_mc", "offered_rate": @offered_rate }`     |
-| Headers      | `x-api-key: {BRIDGE_API_KEY}`                                                                                      |
+| Headers      | `x-api-key: {BRIDGE_API_KEY}`, `X-Happyrobot-Session-Id: @session_id`                                              |
 
-### 6.5 `transfer_to_sales`
+### 6.5 `book_load`
+
+Used after `negotiate_offer` returns `max_rounds_reached: true` and the caller accepts the
+final counter. The server revalidates that `agreed_rate` falls within
+`[loadboard_rate * (1 - OFFER_ACCEPT_MARGIN_PERCENT%), loadboard_rate]`, flips the load to
+`booked`, and writes the `calls` row outcome so the nightly metrics pick it up. See
+[`apps/api/src/routes/bridge/book-load.ts`](../apps/api/src/routes/bridge/book-load.ts).
+
+| Field       | Value                                                                 |
+|-------------|-----------------------------------------------------------------------|
+| Description | `Confirm a booking at an agreed rate after negotiate_offer returned max_rounds_reached=true AND the caller accepted the final counter. Pass load_id from the load the caller is discussing and agreed_rate as the final counter_offer value returned by negotiate_offer. Do NOT call this on the first few rounds; negotiate_offer already books internally when it returns accepted=true.` |
+| Message     | `AI` — "Great, let me get that booked for you"                        |
+| Hold music  | `Acoustic`                                                            |
+| Parameters  | `load_id` (required, example: `@load_id`), `agreed_rate` (required, numeric) |
+
+**Child webhook:**
+
+| Field        | Value                                                                  |
+|--------------|------------------------------------------------------------------------|
+| Method       | `POST`                                                                 |
+| URL          | `{BASE_URL}/api/v1/loads/@load_id/book`                                |
+| Content type | `application/json`                                                     |
+| Body (Raw)   | `{ "agreed_rate": @agreed_rate }`                                      |
+| Headers      | `x-api-key: {BRIDGE_API_KEY}`, `X-Happyrobot-Session-Id: @session_id`  |
+
+The server returns `422` when `agreed_rate` falls outside the acceptable margin or when the
+`X-Happyrobot-Session-Id` header is missing — both signal the HR workflow needs a fix, not
+a retry.
+
+### 6.6 `transfer_to_sales`
 
 Per [requirements](../requitements.secret.md), the transfer is **mocked** — we just play
 the scripted line. Use HappyRobot's **Direct Transfer** integration if you want a real SIP

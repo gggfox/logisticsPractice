@@ -83,6 +83,20 @@ export interface BackfilledClassifyInput {
 }
 
 /**
+ * A merged classify input is "ready" when we successfully fetched the HR
+ * run AND pulled out at least one of the business ids we need to write a
+ * meaningful `calls` row. When it's not ready we'd rather retry than write
+ * a row with `carrier_mc: 'unknown'` + `load_id: undefined` that silently
+ * masquerades as a real failure-to-book.
+ */
+export function isClassifyInputReady(merged: BackfilledClassifyInput): boolean {
+  if (!merged.hr_run_fetched) return false
+  if (merged.carrier_mc !== 'unknown') return true
+  if (merged.load_id !== undefined) return true
+  return false
+}
+
+/**
  * Merge the webhook-side `ClassifyCallInput` with HR's backfilled call-run
  * view. Pure -- no network, no time, no Convex. Exported for unit testing.
  */
@@ -130,6 +144,12 @@ export function createClassifyCallWorker(): Worker<ClassifyCallInput> {
     QUEUE_NAMES.classifyCall,
     async (job) => {
       const data = ClassifyCallInputSchema.parse(job.data)
+      // BullMQ v5: `attemptsMade` counts prior failures (0 on the first
+      // run, N-1 on the Nth). `opts.attempts` falls back to 1 for jobs
+      // enqueued without a per-job override -- treat the very first run
+      // as the only run in that degenerate case so we never loop.
+      const maxAttempts = job.opts.attempts ?? 1
+      const isFinalAttempt = job.attemptsMade + 1 >= maxAttempts
 
       await withWideEvent(
         'ClassifyCall',
@@ -148,6 +168,7 @@ export function createClassifyCallWorker(): Worker<ClassifyCallInput> {
                 })
 
           const merged = mergeRunIntoInput(data, run)
+          const ready = isClassifyInputReady(merged)
 
           enrich({
             call_id: data.call_id,
@@ -159,18 +180,45 @@ export function createClassifyCallWorker(): Worker<ClassifyCallInput> {
             hr_run_fetched: merged.hr_run_fetched,
             hr_classify_tag: merged.hr_classify_tag,
             transcript_source: merged.transcript_source,
+            attempts_made: job.attemptsMade,
+            max_attempts: maxAttempts,
+            ready,
           })
 
-          // Prefer HR's AI-Classify tag; fall back to the keyword scan when
-          // the tag is absent or unrecognized.
-          const outcome =
-            outcomeFromHrTag(merged.hr_classify_tag) ??
-            classifyOutcome({
-              status: data.status,
-              transcript: merged.transcript,
-              load_id: merged.load_id,
-              carrier_mc: merged.carrier_mc === 'unknown' ? undefined : merged.carrier_mc,
+          // Extraction race: HappyRobot's Extract node populates
+          // `carrier_mc` / `load_id` on the `/v1/calls/:id` run view a
+          // beat after `status_changed: completed` fires. Throwing here
+          // triggers BullMQ's exponential backoff so we re-fetch the
+          // run on the next attempt. On the final attempt we still
+          // persist a row so the dashboard doesn't lose the call --
+          // tagged with `dropped_reason: 'extraction_timeout'` to
+          // distinguish it from a genuine no-match drop.
+          if (!ready && !isFinalAttempt) {
+            enrich({
+              skipped_write: true,
+              skip_reason: 'extraction_not_ready',
+              failure_stage: 'extraction_not_ready',
             })
+            throw new Error(
+              `HappyRobot extraction not ready for call ${data.call_id} (attempt ${job.attemptsMade + 1}/${maxAttempts}); will retry`,
+            )
+          }
+
+          // Prefer HR's AI-Classify tag; fall back to the keyword scan when
+          // the tag is absent or unrecognized. When we drop due to an
+          // extraction timeout, force `outcome: 'dropped'` -- the row
+          // exists for audit / dashboard continuity only and should not
+          // be counted as a decline or a no-match.
+          const outcome =
+            !ready && isFinalAttempt
+              ? ('dropped' as CallOutcome)
+              : (outcomeFromHrTag(merged.hr_classify_tag) ??
+                classifyOutcome({
+                  status: data.status,
+                  transcript: merged.transcript,
+                  load_id: merged.load_id,
+                  carrier_mc: merged.carrier_mc === 'unknown' ? undefined : merged.carrier_mc,
+                }))
 
           const negotiations = await convexService.negotiations.getByCallId(data.call_id)
           const finalNeg = negotiations[negotiations.length - 1]
@@ -197,6 +245,7 @@ export function createClassifyCallWorker(): Worker<ClassifyCallInput> {
             outcome,
             negotiation_rounds: negotiations.length,
             final_rate,
+            ...(!ready && isFinalAttempt ? { dropped_reason: 'extraction_timeout' as const } : {}),
           })
         },
       )

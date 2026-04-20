@@ -55,6 +55,22 @@ const defaultQueueOptions = (): QueueOptions => ({
   },
 })
 
+// Classify is on a slower retry cadence than the other queues because it
+// races HappyRobot's Extract node: the `session.status_changed:completed`
+// webhook fires as soon as the call ends, but HR's extraction can take
+// up to ~20s to populate `carrier_mc` / `load_id`. The worker throws on
+// extraction-not-ready to trigger this retry, so attempts=5 at 5s
+// exponential covers the full extraction window (5s + 10s + 20s + 40s).
+const classifyQueueOptions = (): QueueOptions => ({
+  connection: getRedisConnection(),
+  defaultJobOptions: {
+    attempts: 5,
+    backoff: { type: 'exponential', delay: 5_000 },
+    removeOnComplete: { age: 3_600, count: 1_000 },
+    removeOnFail: { age: 24 * 3_600 },
+  },
+})
+
 // Shared payload shapes. Any change here is a contract change between
 // webhook producer and worker consumer.
 
@@ -99,7 +115,7 @@ let verifyCarrierQueue: Queue<VerifyCarrierEnrichmentInput> | null = null
 export function getClassifyCallQueue(): Queue<ClassifyCallInput> {
   classifyCallQueue ??= new Queue<ClassifyCallInput>(
     QUEUE_NAMES.classifyCall,
-    defaultQueueOptions(),
+    classifyQueueOptions(),
   )
   return classifyCallQueue
 }

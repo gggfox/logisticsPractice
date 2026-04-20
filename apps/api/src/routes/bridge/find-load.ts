@@ -3,6 +3,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod'
 import { z } from 'zod'
 import { enrichWideEvent } from '../../observability/wide-event-store.js'
 import { convexService } from '../../services/convex.service.js'
+import { isUnresolvedTemplate } from './_call-id.js'
 
 const ParamsSchema = z.object({
   load_id: z.string().min(1),
@@ -33,7 +34,7 @@ const findLoadRoute: FastifyPluginAsync = async (app) => {
       // template string has a configuration bug, not a missing row. A 400
       // surfaces that bug immediately instead of masquerading as a 404 --
       // an ops hint on the wide event points at what to fix.
-      if (/^[@{:]/.test(load_id) || /[@{}]/.test(load_id)) {
+      if (isUnresolvedTemplate(load_id)) {
         enrichWideEvent(req, {
           template_unresolved: true,
           failure_stage: 'template_substitution',
@@ -65,7 +66,15 @@ const findLoadRoute: FastifyPluginAsync = async (app) => {
           equipment_type: load.equipment_type,
         })
 
-        return load
+        // Strip Convex-internal fields (`_id`, `_creationTime`) from the
+        // public response. An upstream workflow that templates `call_id`
+        // from this response's `_id` would silently collide with real
+        // HappyRobot session ids in the `calls` table; removing the field
+        // here means there is nothing for the workflow to accidentally
+        // grab. The canonical shape lives in `LoadSchema` and does not
+        // include these system fields.
+        const { _id, _creationTime, ...publicLoad } = load
+        return publicLoad
       } catch (err) {
         enrichWideEvent(req, { failure_stage: 'convex_lookup' })
         req.log.error({ err, load_id }, 'Failed to fetch load')

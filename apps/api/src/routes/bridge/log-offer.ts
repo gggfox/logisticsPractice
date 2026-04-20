@@ -4,12 +4,14 @@ import {
   OfferRequestSchema,
   OfferResponseSchema,
 } from '@carrier-sales/shared'
-import type { FastifyPluginAsync } from 'fastify'
+import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
 import type { ZodTypeProvider } from 'fastify-type-provider-zod'
+import { config } from '../../config.js'
 import { bookingOutcomeCounter, negotiationRoundsHistogram } from '../../observability/metrics.js'
 import { enrichWideEvent } from '../../observability/wide-event-store.js'
 import { convexService } from '../../services/convex.service.js'
 import { ErrorBodySchema } from '../_error-schema.js'
+import { HR_SESSION_HEADER, resolveCallId } from './_call-id.js'
 
 export function calculateCounterOffer(
   loadboardRate: number,
@@ -21,6 +23,59 @@ export function calculateCounterOffer(
   return Math.round(loadboardRate - gap * concessionFactor)
 }
 
+/**
+ * Read the call_id off the request, preferring the HR session header,
+ * enrich the wide event with the diagnostic flags, and apply the
+ * `STRICT_CALL_ID` policy. Returns `{ kind: 'resolved', call_id }` to
+ * continue processing or `{ kind: 'replied' }` when a 422 has already
+ * been sent. Extracted from the route handler so the latter stays under
+ * the Biome cognitive-complexity budget.
+ */
+function resolveCallIdOrReply(
+  req: FastifyRequest,
+  reply: FastifyReply,
+  body: { call_id: string; load_id: string; carrier_mc: string },
+): { kind: 'resolved'; call_id: string } | { kind: 'replied' } {
+  const { call_id: bodyCallId, load_id, carrier_mc } = body
+  const headerValue = req.headers[HR_SESSION_HEADER]
+  const resolved = resolveCallId(headerValue, bodyCallId)
+
+  enrichWideEvent(req, {
+    call_id_source: resolved.source,
+    call_id_is_template_literal: resolved.body_is_template,
+    call_id_looks_like_convex_id: resolved.body_is_convex_id,
+  })
+
+  if (resolved.call_id !== null) {
+    return { kind: 'resolved', call_id: resolved.call_id }
+  }
+
+  enrichWideEvent(req, { failure_stage: 'call_id_unresolvable' })
+
+  if (config.bridge.strictCallId) {
+    req.log.warn(
+      { body_call_id: bodyCallId, load_id, carrier_mc, header_present: Boolean(headerValue) },
+      `call_id unresolvable: body is template/Convex-id and ${HR_SESSION_HEADER} header is missing.`,
+    )
+    reply.code(422).send({
+      error: 'Unprocessable Entity',
+      message: `Cannot correlate this offer to a call. Set the \`${HR_SESSION_HEADER}\` header to \`@session_id\` in the HappyRobot POST Webhook node, or send a resolved session UUID as the body \`call_id\`.`,
+      statusCode: 422,
+    })
+    return { kind: 'replied' }
+  }
+
+  // Flag-off fallback: keep processing on the least-bad input so an
+  // in-flight call doesn't hang mid-negotiation. The wide-event flags
+  // above are the SigNoz-queryable signal that HR is still
+  // misconfigured.
+  req.log.warn(
+    { body_call_id: bodyCallId, load_id, carrier_mc },
+    `call_id unresolvable; falling back to body value in non-strict mode. Set ${HR_SESSION_HEADER} and flip STRICT_CALL_ID=true to enforce.`,
+  )
+  return { kind: 'resolved', call_id: bodyCallId }
+}
+
 const logOfferRoute: FastifyPluginAsync = async (app) => {
   app.withTypeProvider<ZodTypeProvider>().post(
     '/api/v1/offers',
@@ -28,18 +83,30 @@ const logOfferRoute: FastifyPluginAsync = async (app) => {
       schema: {
         tags: ['offers'],
         summary: 'Submit a carrier offer (negotiation round)',
-        description: `Evaluates a carrier's offer for a load. Returns either an acceptance or a counter, advancing the negotiation round stored in Convex by call_id. Round > ${MAX_NEGOTIATION_ROUNDS} short-circuits with \`max_rounds_reached\`.`,
+        description: `Evaluates a carrier's offer for a load. Returns either an acceptance or a counter, advancing the negotiation round stored in Convex by call_id. Round > ${MAX_NEGOTIATION_ROUNDS} short-circuits with \`max_rounds_reached\`. The \`call_id\` is preferably read from the \`X-Happyrobot-Session-Id\` request header (HR templates headers server-side); falling back to body \`call_id\` only when it is not raw template text and not a Convex document id. When \`STRICT_CALL_ID=true\`, unresolvable correlation ids return 422.`,
         body: OfferRequestSchema,
         response: {
           200: OfferResponseSchema,
           404: ErrorBodySchema,
+          422: ErrorBodySchema,
           500: ErrorBodySchema,
         },
       },
     },
     async (req, reply) => {
-      const { call_id, load_id, carrier_mc, offered_rate } = req.body
-      enrichWideEvent(req, { call_id, load_id, carrier_mc, offered_rate })
+      const { call_id: bodyCallId, load_id, carrier_mc, offered_rate } = req.body
+      enrichWideEvent(req, { load_id, carrier_mc, offered_rate })
+
+      const resolution = resolveCallIdOrReply(req, reply, {
+        call_id: bodyCallId,
+        load_id,
+        carrier_mc,
+      })
+      if (resolution.kind === 'replied') {
+        return reply
+      }
+      const call_id = resolution.call_id
+      enrichWideEvent(req, { call_id })
 
       try {
         const load = await convexService.loads.getByLoadId(load_id)

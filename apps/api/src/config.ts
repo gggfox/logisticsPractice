@@ -49,6 +49,13 @@ const EnvSchema = z.object({
   // HappyRobot workflow webhooks can only send static headers, so the
   // common case leaves this unset and relies on `x-api-key` alone.
   WEBHOOK_SECRET: optionalStringWithDefault(''),
+  // When true, `/api/v1/offers` rejects a request with 422 if neither
+  // `X-Happyrobot-Session-Id` header nor a plausible body `call_id`
+  // resolves to a usable correlation id. When false (default), the route
+  // still prefers the header but falls back to the body and logs a
+  // warning instead of rejecting -- this is the safe rollout posture
+  // until every HappyRobot workflow has been updated to send the header.
+  STRICT_CALL_ID: optionalStringWithDefault('false'),
 
   // FMCSA
   FMCSA_WEB_KEY: requiredString('FMCSA_WEB_KEY'),
@@ -126,6 +133,7 @@ export const config = {
     apiKey: env.BRIDGE_API_KEY,
     adminKey: env.ADMIN_API_KEY,
     webhookSecret: env.WEBHOOK_SECRET,
+    strictCallId: env.STRICT_CALL_ID.toLowerCase() === 'true',
   },
 
   fmcsa: {
@@ -182,6 +190,7 @@ function printBootSummary(): void {
   kv('bridge.apiKey', maskSecret(config.bridge.apiKey))
   kv('bridge.adminKey', maskSecret(config.bridge.adminKey))
   kv('bridge.webhookSecret', maskSecret(config.bridge.webhookSecret))
+  kv('bridge.strictCallId', String(config.bridge.strictCallId))
 
   kv('fmcsa.webKey', maskSecret(config.fmcsa.webKey))
 

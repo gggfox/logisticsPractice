@@ -120,6 +120,16 @@ const callCompletedRoute: FastifyPluginAsync = async (app) => {
               .sort((a, b) => a.localeCompare(b))
               .join(',')
           : undefined,
+        // The `session.status_changed` envelope often arrives with
+        // `carrier_mc` undefined; surfacing the `vars` keys lets us
+        // see whether HappyRobot stored `mc_number` / `carrier_mc` at
+        // all, and under which name. Low-cardinality because the
+        // workflow's variable shape is sender-stable.
+        vars_keys:
+          Object.keys(vars)
+            .sort((a, b) => a.localeCompare(b))
+            .join(',') || undefined,
+        has_extracted_data: extracted_data !== undefined,
       })
       webhookReceivedCounter.add(1, {
         signature_state: signatureState,
@@ -151,19 +161,29 @@ const callCompletedRoute: FastifyPluginAsync = async (app) => {
       try {
         // Fan-out: BullMQ workers sharing a queue name compete, so publish
         // to two topics (classify + sentiment) for parallel processing.
+        // The classify job is delayed 3s so the first attempt doesn't race
+        // HappyRobot's Extract node -- HR's extraction lands in the
+        // `calls/:id` run view a beat after `status_changed: completed`
+        // fires, and starting without the extraction forces every call
+        // through at least one retry. Sentiment runs immediately because
+        // it works off the webhook transcript alone.
         await Promise.all([
-          getClassifyCallQueue().add('classify', {
-            call_id,
-            carrier_mc,
-            load_id,
-            transcript,
-            speakers,
-            duration_seconds,
-            started_at,
-            ended_at: ended_at ?? started_at,
-            status,
-            extracted_data,
-          }),
+          getClassifyCallQueue().add(
+            'classify',
+            {
+              call_id,
+              carrier_mc,
+              load_id,
+              transcript,
+              speakers,
+              duration_seconds,
+              started_at,
+              ended_at: ended_at ?? started_at,
+              status,
+              extracted_data,
+            },
+            { delay: 3_000 },
+          ),
           getAnalyzeSentimentQueue().add('sentiment', {
             call_id,
             transcript,
