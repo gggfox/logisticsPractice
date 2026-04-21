@@ -46,7 +46,6 @@ apps/dashboard/src/
   routes/
     __root.tsx            <- layout + Sidebar + <Outlet />
     index.tsx             <- '/'  -> OverviewPage
-    live.tsx              <- '/live'
     calls.tsx             <- '/calls'   (validateSearch with Zod)
     loads.tsx             <- '/loads'   (validateSearch with LoadSearchParamsSchema)
     carriers.tsx          <- '/carriers'

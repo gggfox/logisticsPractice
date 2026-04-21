@@ -181,7 +181,7 @@ const logOfferRoute: FastifyPluginAsync = async (app) => {
         // carry carrier/load/rate, so if we relied on it alone the
         // dashboard would show `unknown` until the `completed` event
         // arrived -- and even then without a final rate. Writing here
-        // keeps the Call History & Live Feed in sync mid-negotiation.
+        // keeps Call History in sync mid-negotiation.
         await convexService.calls.upsertFromOffer({
           call_id,
           carrier_mc,

@@ -23,7 +23,6 @@ routes/
   loads.tsx
   carriers.tsx
   negotiations.tsx
-  live.tsx
 ```
 
 Each leaf uses `createFileRoute`:

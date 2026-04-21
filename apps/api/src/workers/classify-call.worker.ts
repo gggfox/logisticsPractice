@@ -132,17 +132,28 @@ export interface BackfilledClassifyInput {
 }
 
 /**
- * A merged classify input is "ready" when we successfully fetched the HR
- * run AND pulled out at least one of the business ids we need to write a
- * meaningful `calls` row. When it's not ready we'd rather retry than write
- * a row with `carrier_mc: 'unknown'` + `load_id: undefined` that silently
+ * A merged classify input is "ready" when we have enough business data to
+ * write a meaningful `calls` row -- `carrier_mc` and `load_id` identified
+ * from SOME source. When it's not ready we'd rather retry than write a row
+ * with `carrier_mc: 'unknown'` + `load_id: undefined` that silently
  * masquerades as a real failure-to-book.
+ *
+ * Two readiness paths, in priority order:
+ *
+ *   1. Webhook alone already carries both IDs -- skip the HR backfill
+ *      wait. The templated per-node webhook (docs §9.1) delivers
+ *      `carrier_mc` + `load_id` directly, so gating on `hr_run_fetched`
+ *      here would drop every workflow whose template omits `run_id`.
+ *   2. Otherwise require HR backfill, then accept either ID. This is
+ *      the original pre-templated-webhook posture kept for the
+ *      envelope-only delivery path (`session.status_changed`).
  */
 export function isClassifyInputReady(merged: BackfilledClassifyInput): boolean {
+  const hasCarrier = merged.carrier_mc !== 'unknown'
+  const hasLoad = merged.load_id !== undefined
+  if (hasCarrier && hasLoad) return true
   if (!merged.hr_run_fetched) return false
-  if (merged.carrier_mc !== 'unknown') return true
-  if (merged.load_id !== undefined) return true
-  return false
+  return hasCarrier || hasLoad
 }
 
 /**

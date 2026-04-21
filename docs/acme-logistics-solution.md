@@ -66,12 +66,11 @@ After each call completes, the system automatically:
 
 ### 5. Real-Time Analytics Dashboard
 
-The dashboard provides six views with live data:
+The dashboard provides five views with live data:
 
 | View | Purpose |
 |------|---------|
 | **Overview** | KPI cards, call volume trends, outcome distribution, sentiment breakdown |
-| **Live Feed** | Real-time scrolling feed of active and recent calls |
 | **Call History** | Filterable table with transcript access and CSV export |
 | **Load Board** | Active loads with geographic map visualization |
 | **Carrier Intelligence** | Carrier verification status, call history, booking rates |

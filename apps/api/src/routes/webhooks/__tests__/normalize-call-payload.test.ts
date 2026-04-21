@@ -382,4 +382,41 @@ describe('normalizeCallEvent', () => {
     const n = normalizeCallEvent(raw)
     expect(n.carrier_mc).toBeUndefined()
   })
+
+  it('pulls reference_number from the top level (flat HR template)', () => {
+    const raw = {
+      session_id: 'sess-1',
+      status: 'completed',
+      mc_number: 264184,
+      reference_number: 'LOAD-1005',
+    }
+    const n = normalizeCallEvent(raw)
+    expect(n.load_id).toBe('LOAD-1005')
+  })
+
+  it('pulls booking_decision and final_rate from the top level', () => {
+    const raw = {
+      session_id: 'sess-1',
+      status: 'completed',
+      mc_number: 264184,
+      load_id: 'LOAD-1004',
+      booking_decision: 'yes',
+      final_rate: 2100,
+    }
+    const n = normalizeCallEvent(raw)
+    expect(n.booking_decision).toBe('yes')
+    expect(n.final_rate_from_extraction).toBe(2100)
+  })
+
+  it('prefers nested extracted_data over top-level booking_decision', () => {
+    const raw = {
+      session_id: 'sess-1',
+      status: 'completed',
+      booking_decision: 'no',
+      extracted_data: { booking_decision: 'yes', final_rate: 2100 },
+    }
+    const n = normalizeCallEvent(raw)
+    expect(n.booking_decision).toBe('yes')
+    expect(n.final_rate_from_extraction).toBe(2100)
+  })
 })

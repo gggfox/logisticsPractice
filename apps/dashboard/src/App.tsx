@@ -5,16 +5,14 @@ import { Sidebar } from './components/Sidebar'
 import { Topbar } from './components/layout/Topbar'
 import { CallHistoryPage } from './pages/CallHistoryPage'
 import { CarrierIntelPage } from './pages/CarrierIntelPage'
-import { LiveFeedPage } from './pages/LiveFeedPage'
 import { LoadBoardPage } from './pages/LoadBoardPage'
 import { NegotiationPage } from './pages/NegotiationPage'
 import { OverviewPage } from './pages/OverviewPage'
 
-type Page = 'overview' | 'live' | 'calls' | 'loads' | 'carriers' | 'negotiations'
+type Page = 'overview' | 'calls' | 'loads' | 'carriers' | 'negotiations'
 
 const pages: Record<Page, () => ReactElement> = {
   overview: OverviewPage,
-  live: LiveFeedPage,
   calls: CallHistoryPage,
   loads: LoadBoardPage,
   carriers: CarrierIntelPage,

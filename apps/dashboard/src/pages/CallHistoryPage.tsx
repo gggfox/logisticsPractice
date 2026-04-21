@@ -1,12 +1,11 @@
 import { Badge } from '@/components/Badge'
-import { CallConversation } from '@/components/CallConversation'
 import { EmptyState } from '@/components/EmptyState'
 import { PageLayout } from '@/components/layout/PageLayout'
 import { formatCurrency, formatDateTime, formatDuration } from '@/lib/formatters'
 import { api } from '@carrier-sales/convex/convex/_generated/api'
 import { useQuery } from 'convex/react'
-import { ChevronRight, Download, SlidersHorizontal } from 'lucide-react'
-import { Fragment, type KeyboardEvent, useState } from 'react'
+import { Download, SlidersHorizontal } from 'lucide-react'
+import { useState } from 'react'
 
 type OutcomeFilter = 'all' | 'booked' | 'declined' | 'no_match' | 'transferred' | 'dropped'
 
@@ -44,83 +43,44 @@ type CallRowData = {
   negotiation_rounds: number
   final_rate?: number
   duration_seconds?: number
-  transcript?: string
-  speakers?: Array<{ role: string; text: string }>
 }
 
 interface CallRowProps {
   call: CallRowData
-  expanded: boolean
-  onToggle: () => void
 }
 
-function CallRow({ call, expanded, onToggle }: CallRowProps) {
-  const handleKeyDown = (event: KeyboardEvent<HTMLTableRowElement>) => {
-    if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault()
-      onToggle()
-    }
-  }
-
+function CallRow({ call }: CallRowProps) {
   return (
-    <Fragment>
-      <tr
-        onClick={onToggle}
-        onKeyDown={handleKeyDown}
-        tabIndex={0}
-        aria-expanded={expanded}
-        className="cursor-pointer border-l-2 border-l-transparent transition-colors hover:border-l-accent-500 hover:bg-surface-2/50 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-accent-500/30"
-      >
-        <td className="whitespace-nowrap px-4 py-3 text-sm text-slate-700 dark:text-slate-300">
-          {formatDateTime(call.started_at)}
-        </td>
-        <td className="max-w-[160px] truncate px-4 py-3 font-mono text-xs text-slate-800 dark:text-slate-200">
-          {call.call_id}
-        </td>
-        <td className="whitespace-nowrap px-4 py-3 font-mono text-sm text-slate-800 dark:text-slate-200">
-          {call.carrier_mc}
-        </td>
-        <td className="px-4 py-3">
-          <Badge variant="outcome" tone={call.outcome}>
-            {labelFromKey(call.outcome)}
-          </Badge>
-        </td>
-        <td className="px-4 py-3">
-          <Badge variant="sentiment" tone={call.sentiment}>
-            {labelFromKey(call.sentiment)}
-          </Badge>
-        </td>
-        <td className="whitespace-nowrap px-4 py-3 text-sm numeric text-slate-800 dark:text-slate-200">
-          {call.negotiation_rounds}
-        </td>
-        <td className="whitespace-nowrap px-4 py-3 text-sm numeric text-slate-800 dark:text-slate-200">
-          {call.final_rate !== undefined ? formatCurrency(call.final_rate) : '—'}
-        </td>
-        <td className="whitespace-nowrap px-4 py-3 text-sm numeric text-slate-800 dark:text-slate-200">
-          <span className="inline-flex w-full items-center justify-between gap-2">
-            <span>
-              {call.duration_seconds !== undefined ? formatDuration(call.duration_seconds) : '—'}
-            </span>
-            <ChevronRight
-              className="h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform"
-              style={{ transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)' }}
-              strokeWidth={2}
-              aria-hidden
-            />
-          </span>
-        </td>
-      </tr>
-      {expanded ? (
-        <tr className="bg-surface-2/60">
-          <td colSpan={8} className="px-4 py-4">
-            <p className="eyebrow">Conversation</p>
-            <div className="mt-2">
-              <CallConversation speakers={call.speakers} transcript={call.transcript} />
-            </div>
-          </td>
-        </tr>
-      ) : null}
-    </Fragment>
+    <tr className="border-l-2 border-l-transparent">
+      <td className="whitespace-nowrap px-4 py-3 text-sm text-slate-700 dark:text-slate-300">
+        {formatDateTime(call.started_at)}
+      </td>
+      <td className="max-w-[160px] truncate px-4 py-3 font-mono text-xs text-slate-800 dark:text-slate-200">
+        {call.call_id}
+      </td>
+      <td className="whitespace-nowrap px-4 py-3 font-mono text-sm text-slate-800 dark:text-slate-200">
+        {call.carrier_mc}
+      </td>
+      <td className="px-4 py-3">
+        <Badge variant="outcome" tone={call.outcome}>
+          {labelFromKey(call.outcome)}
+        </Badge>
+      </td>
+      <td className="px-4 py-3">
+        <Badge variant="sentiment" tone={call.sentiment}>
+          {labelFromKey(call.sentiment)}
+        </Badge>
+      </td>
+      <td className="whitespace-nowrap px-4 py-3 text-sm numeric text-slate-800 dark:text-slate-200">
+        {call.negotiation_rounds}
+      </td>
+      <td className="whitespace-nowrap px-4 py-3 text-sm numeric text-slate-800 dark:text-slate-200">
+        {call.final_rate !== undefined ? formatCurrency(call.final_rate) : '—'}
+      </td>
+      <td className="whitespace-nowrap px-4 py-3 text-sm numeric text-slate-800 dark:text-slate-200">
+        {call.duration_seconds !== undefined ? formatDuration(call.duration_seconds) : '—'}
+      </td>
+    </tr>
   )
 }
 
@@ -128,7 +88,6 @@ export function CallHistoryPage() {
   const calls = useQuery(api.calls.getAll)
   const [outcomeFilter, setOutcomeFilter] = useState<OutcomeFilter>('all')
   const [sentimentFilter, setSentimentFilter] = useState<SentimentFilter>('all')
-  const [expandedCallId, setExpandedCallId] = useState<string | null>(null)
 
   const filteredCalls =
     calls?.filter(
@@ -192,7 +151,7 @@ export function CallHistoryPage() {
     <PageLayout
       eyebrow="Archive"
       title="Call history"
-      description="Review outcomes, sentiment, and transcripts from carrier sales calls."
+      description="Review outcomes and sentiment from carrier sales calls."
       mode="fixed"
       actions={exportAction}
     >
@@ -288,17 +247,7 @@ export function CallHistoryPage() {
                   </td>
                 </tr>
               ) : (
-                filteredCalls.map((call) => {
-                  const expanded = expandedCallId === call.call_id
-                  return (
-                    <CallRow
-                      key={call._id}
-                      call={call}
-                      expanded={expanded}
-                      onToggle={() => setExpandedCallId(expanded ? null : call.call_id)}
-                    />
-                  )
-                })
+                filteredCalls.map((call) => <CallRow key={call._id} call={call} />)
               )}
             </tbody>
           </table>

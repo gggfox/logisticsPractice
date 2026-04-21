@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { ClassifyCallInput } from '../../queues/index.js'
 import type { HappyRobotCallRun } from '../../services/happyrobot.service.js'
 import {
+  isClassifyInputReady,
   mergeRunIntoInput,
   outcomeFromHrTag,
   resolveOutcome,
@@ -249,5 +250,64 @@ describe('resolveOutcome', () => {
         hr_classify_tag: 'Success',
       }),
     ).toBe('booked')
+  })
+})
+
+describe('isClassifyInputReady', () => {
+  const base = {
+    transcript: '',
+    speakers: undefined,
+    extraction: {},
+    duration_seconds: undefined,
+    hr_classify_tag: undefined,
+    transcript_source: 'none' as const,
+  }
+
+  it('is ready when webhook alone carries both IDs (HR backfill skipped)', () => {
+    // Reproduces the prod case where the templated per-node webhook
+    // delivers carrier_mc + load_id directly and HR `/runs/:id` never
+    // resolves because the template omits `run_id`. Before this change
+    // the call dropped despite having all the data we need.
+    expect(
+      isClassifyInputReady({
+        ...base,
+        carrier_mc: '264184',
+        load_id: 'LOAD-1004',
+        hr_run_fetched: false,
+      }),
+    ).toBe(true)
+  })
+
+  it('is not ready when webhook only has load_id and HR backfill failed', () => {
+    expect(
+      isClassifyInputReady({
+        ...base,
+        carrier_mc: 'unknown',
+        load_id: 'LOAD-1004',
+        hr_run_fetched: false,
+      }),
+    ).toBe(false)
+  })
+
+  it('is ready when only load_id is present but HR backfill succeeded', () => {
+    expect(
+      isClassifyInputReady({
+        ...base,
+        carrier_mc: 'unknown',
+        load_id: 'LOAD-1004',
+        hr_run_fetched: true,
+      }),
+    ).toBe(true)
+  })
+
+  it('is not ready when both IDs missing even after HR backfill', () => {
+    expect(
+      isClassifyInputReady({
+        ...base,
+        carrier_mc: 'unknown',
+        load_id: undefined,
+        hr_run_fetched: true,
+      }),
+    ).toBe(false)
   })
 })

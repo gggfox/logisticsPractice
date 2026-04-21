@@ -135,11 +135,15 @@ export function normalizeCallEvent(raw: Record<string, unknown>): NormalizedCall
     extracted_data?.carrier_mc,
     extracted_data?.mc_number,
   )
+  // `inner.reference_number` covers flat templated bodies that lift the
+  // Extract node's `reference_number` up to the top level instead of
+  // nesting it inside `extracted_data`.
   const load_id = pickIdString(
     inner.load_id,
     vars.load_id,
     vars.reference_number,
     extractReferenceNumber(extracted_data),
+    extractReferenceNumber(inner),
   )
   const duration_seconds = pickNumber(inner.duration_seconds)
   const phone_number = pickString(inner.phone_number, vars.phone_number)
@@ -163,8 +167,11 @@ export function normalizeCallEvent(raw: Record<string, unknown>): NormalizedCall
     started_at,
     ended_at,
     extracted_data,
-    booking_decision: extractBookingDecision(extracted_data),
-    final_rate_from_extraction: extractFinalRate(extracted_data),
+    // Accept booking_decision / final_rate at the top level too so flat
+    // HR templates that don't nest under `extracted_data` can still drive
+    // the booking gate. Nested extraction wins when both are present.
+    booking_decision: extractBookingDecision(extracted_data) ?? extractBookingDecision(inner),
+    final_rate_from_extraction: extractFinalRate(extracted_data) ?? extractFinalRate(inner),
     carrier_mc_valid: carrier_mc === undefined || isValidMcFormat(carrier_mc),
     load_id_plausible: load_id === undefined || isPlausibleLoadId(load_id),
     is_terminal: isTerminalStatus(envelope.status_current),

@@ -94,7 +94,7 @@ small `useDarkMode` hook). It's UI-local; it doesn't need a URL.
 
 ## Step 3. One route per page
 
-The six pages become six route files. Example -- index:
+The five pages become five route files. Example -- index:
 
 `apps/dashboard/src/routes/index.tsx`:
 
@@ -120,7 +120,7 @@ export const Route = createFileRoute('/loads')({
 })
 ```
 
-Repeat for `live`, `calls`, `carriers`, `negotiations`.
+Repeat for `calls`, `carriers`, `negotiations`.
 
 If autoCodeSplitting in the Vite plugin is on (recommended), the
 route components are automatically lazy-loaded. If you need manual
@@ -191,14 +191,13 @@ import { Link, useMatchRoute } from '@tanstack/react-router'
 
 type NavItem = {
   id: string
-  to: '/' | '/live' | '/calls' | '/loads' | '/carriers' | '/negotiations'
+  to: '/' | '/calls' | '/loads' | '/carriers' | '/negotiations'
   label: string
   icon: string
 }
 
 const navItems: NavItem[] = [
   { id: 'overview', to: '/', label: 'Overview', icon: '📊' },
-  { id: 'live', to: '/live', label: 'Live Feed', icon: '🔴' },
   { id: 'calls', to: '/calls', label: 'Call History', icon: '📞' },
   { id: 'loads', to: '/loads', label: 'Load Board', icon: '🚚' },
   { id: 'carriers', to: '/carriers', label: 'Carriers', icon: '🏢' },

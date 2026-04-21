@@ -123,7 +123,6 @@ Queries wired up today:
 | Page                | Convex queries                                  |
 |---------------------|--------------------------------------------------|
 | Overview            | `metrics.getSummary`, `metrics.getHistory`       |
-| Live Feed           | `calls.getRecent` (limit 30)                     |
 | Call History        | `calls.getAll`                                   |
 | Load Board          | `loads.getAll`                                   |
 | Carriers            | `carriers.getAll`, `calls.getAll`                |
@@ -137,8 +136,7 @@ refresh path in the UI.
 
 - **Loading** (`data === undefined`): skeleton placeholders. Never "0 calls".
 - **Empty** (`data.length === 0`): `EmptyState` with a lucide icon + copy
-  (e.g. `Inbox` on Live Feed, `SlidersHorizontal` when filters hide all
-  rows).
+  (e.g. `SlidersHorizontal` when filters hide all rows).
 - **Error** (thrown from the query or a child render): caught by
   `ErrorBoundary` keyed on the current page so switching pages resets the
   boundary.
@@ -215,7 +213,7 @@ The single rule that kept us out of double‑scroll hell:
   Used by Overview, Load Board, Carriers, Negotiations.
 - `mode="fixed"` — body is `flex-1 overflow-hidden`; children manage their
   own internal scroll (sticky table headers, virtualised feeds). Used by
-  Live Feed and Call History.
+  Call History.
 
 Both the main column and `<main>` carry `min-w-0` so that flex children like
 wide tables constrain themselves to available width instead of pushing
@@ -253,7 +251,6 @@ Located in [`apps/dashboard/src/components`](../apps/dashboard/src/components):
 | Page                          | Mode    | Shape |
 |-------------------------------|---------|-------|
 | `OverviewPage`                | scroll  | 4 `StatCard`s (calls, booking rate, revenue, avg rounds) with sparklines, then cardless wells for calls‑over‑time (line), outcome distribution (pie), and sentiment (bar). |
-| `LiveFeedPage`                | fixed   | Scrolling column of call cards with outcome‑tinted left borders; `EmptyState` (`Inbox`) when there are no recent calls. |
 | `CallHistoryPage`             | fixed   | Filter bar + sticky‑header table; body scrolls, page does not. Badges use `variant="outcome"` / `variant="sentiment"`. |
 | `LoadBoardPage`               | scroll  | Filter/search card, full‑bleed Leaflet map, then a cardless list of matching loads. |
 | `CarrierIntelPage`            | scroll  | Search + sortable table, eligibility chip via `Badge`, hover accent on rows. |
@@ -296,7 +293,7 @@ return (
   against a pre‑built bundle.
 - Selectors: **prefer `data-testid`** over text. The UI guarantees these
   test IDs are stable even when copy changes:
-  - `sidebar`, `sidebar-nav`, `sidebar-nav-{overview|live|calls|loads|carriers|negotiations}`, `sidebar-theme-toggle`
+  - `sidebar`, `sidebar-nav`, `sidebar-nav-{overview|calls|loads|carriers|negotiations}`, `sidebar-theme-toggle`
   - `topbar`
   - `page-main`
   - Page‑specific IDs (tables, cards, filters) — see each page source.
@@ -378,9 +375,9 @@ starts.
 - **Flex + tables**: any ancestor of a wide `<table>` must carry `min-w-0`
   or the table will blow out the layout. `App.tsx` and `PageLayout` already
   do this; new wrappers must preserve it.
-- **Strict‑mode e2e matches**: Playwright's `getByText('Live')` will match
-  both the "Live Feed" nav item and an in‑page "Live" badge. Prefer
-  `getByTestId('sidebar-nav-live')` over `getByText`.
+- **Strict‑mode e2e matches**: Sidebar copy can collide with in‑page
+  text (e.g. brand string vs. hero subtitle). Prefer
+  `getByTestId('sidebar-nav-<id>')` over `getByText`.
 
 ---
 
@@ -414,7 +411,6 @@ apps/dashboard/
     │   └── formatters.ts            # currency / percent / number / date
     └── pages/
         ├── OverviewPage.tsx
-        ├── LiveFeedPage.tsx
         ├── CallHistoryPage.tsx
         ├── LoadBoardPage.tsx
         ├── CarrierIntelPage.tsx

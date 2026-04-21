@@ -6,12 +6,11 @@ import {
   type LucideIcon,
   Moon,
   PhoneCall,
-  Radio,
   Sun,
   Truck,
 } from 'lucide-react'
 
-type Page = 'overview' | 'live' | 'calls' | 'loads' | 'carriers' | 'negotiations'
+type Page = 'overview' | 'calls' | 'loads' | 'carriers' | 'negotiations'
 
 interface NavItem {
   id: Page
@@ -21,7 +20,6 @@ interface NavItem {
 
 const navItems: NavItem[] = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
-  { id: 'live', label: 'Live Feed', icon: Radio },
   { id: 'calls', label: 'Call History', icon: PhoneCall },
   { id: 'loads', label: 'Load Board', icon: Truck },
   { id: 'carriers', label: 'Carriers', icon: Building2 },
