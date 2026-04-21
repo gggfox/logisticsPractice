@@ -69,6 +69,7 @@ jobs:
     env:
       CONVEX_URL: https://example.convex.cloud
       HAPPYROBOT_API_KEY: ci-stub-happyrobot
+      HAPPYROBOT_ORG_ID: ci-stub-happyrobot-org
       BRIDGE_API_KEY: ci-stub-bridge
       ADMIN_API_KEY: ci-stub-admin
       FMCSA_WEB_KEY: ci-stub-fmcsa

@@ -85,15 +85,23 @@ function classifyOutcome(data: {
 }): CallOutcome {
   const transcript = (data.transcript ?? '').toLowerCase()
 
-  if (transcript.includes('transfer') || data.status === 'transferred') {
-    return 'transferred'
-  }
+  // `booked` is checked BEFORE `transferred` so a call that ended in a
+  // commit + transfer doesn't downgrade to `transferred`. The
+  // authoritative-book gate only fires on `outcome === 'booked'`, and
+  // the HR workflow consistently runs `transfer_to_sales` right after
+  // a successful book -- so matching `book it` / `booked` first is
+  // what actually flips the load-board status.
   if (
     transcript.includes('accepted') ||
     transcript.includes('booked') ||
+    transcript.includes('book it') ||
+    transcript.includes('booking with us') ||
     transcript.includes("let's do it")
   ) {
     return 'booked'
+  }
+  if (transcript.includes('transfer') || data.status === 'transferred') {
+    return 'transferred'
   }
   if (!data.load_id && !data.carrier_mc) {
     return 'dropped'
@@ -196,21 +204,42 @@ type Enrich = (fields: Record<string, unknown>) => void
  * non-existent load to `booked`; the error is still recorded on the wide
  * event for follow-up.
  */
-async function checkLoadExists(
+interface LoadSnapshot {
+  loadboard_rate: number
+  status: string
+}
+
+/**
+ * One indexed Convex query. Returns the narrow slice of the load
+ * row the worker actually needs downstream:
+ *   - presence -> gates promotion to `booked`
+ *   - `loadboard_rate` -> lets us infer `final_rate` when the carrier
+ *     accepted list price without a formal negotiation (e.g. the user
+ *     said "Book it." at the posted rate and the LLM transferred
+ *     without calling `book_load`).
+ *   - `status` -> lets us skip the auto-book attempt when the load
+ *     isn't in a bookable state, matching `attemptBookLoad`'s guard.
+ *
+ * Convex errors are swallowed back to `null` so a transient outage
+ * can't spuriously flip a non-existent load to `booked`; the error is
+ * recorded on the wide event for follow-up.
+ */
+async function lookupLoad(
   load_id: string | undefined,
   { callId, enrich }: { callId: string; enrich: Enrich },
-): Promise<boolean> {
-  if (load_id === undefined) return false
+): Promise<LoadSnapshot | null> {
+  if (load_id === undefined) return null
   try {
     const load = await convexService.loads.getByLoadId(load_id)
-    return load !== null
+    if (!load) return null
+    return { loadboard_rate: load.loadboard_rate, status: load.status }
   } catch (err) {
     logger.warn(
       { err, call_id: callId, load_id },
       'classify: loads.getByLoadId validation lookup failed',
     )
     enrich({ load_lookup_error: err instanceof Error ? err.message : String(err) })
-    return false
+    return null
   }
 }
 
@@ -405,6 +434,64 @@ export function mergeRunIntoInput(
   }
 }
 
+type FinalRateSource =
+  | 'accepted_negotiation'
+  | 'webhook_extraction'
+  | 'hr_runs_extraction'
+  | 'list_price_fallback'
+  | 'none'
+
+/**
+ * List-price fallback: when the carrier committed at the posted
+ * rate (no negotiation took place and no explicit final_rate arrived
+ * through HR Extract / webhook body), infer `final_rate` from the
+ * load's `loadboard_rate`. Strictly gated so a real rejected
+ * negotiation can't silently ride a list-price book:
+ *   - `outcome === 'booked'` -- keyword scan / tag already says booked
+ *   - `negotiationCount === 0` -- no `negotiate_offer` rows in Convex,
+ *     so there's no counter-offer the carrier might have accepted
+ *     instead of list price.
+ *   - `load !== null` -- we have a Convex row with the rate
+ *   - every explicit rate source is absent -- this is strictly a
+ *     last-resort fallback, not an override.
+ */
+function computeImpliedListPriceRate(args: {
+  outcome: CallOutcome
+  load: LoadSnapshot | null
+  negotiationCount: number
+  negotiatedRate: number | undefined
+  webhookFinalRate: number | undefined
+  extractionFinalRate: number | undefined
+}): number | undefined {
+  if (args.outcome !== 'booked') return undefined
+  if (args.negotiationCount !== 0) return undefined
+  if (args.load === null) return undefined
+  if (args.negotiatedRate !== undefined) return undefined
+  if (args.webhookFinalRate !== undefined) return undefined
+  if (args.extractionFinalRate !== undefined) return undefined
+  return args.load.loadboard_rate
+}
+
+/**
+ * Pure selector that mirrors the `??` chain feeding `final_rate`. Kept
+ * alongside that computation so the wide-event label and the actual
+ * rate can never drift -- if the chain adds a new source (e.g.
+ * `book_load_webhook_rate`), both this label and the assignment move
+ * in lockstep.
+ */
+function resolveFinalRateSource(args: {
+  negotiatedRate: number | undefined
+  webhookFinalRate: number | undefined
+  extractionFinalRate: number | undefined
+  impliedListPriceRate: number | undefined
+}): FinalRateSource {
+  if (args.negotiatedRate !== undefined) return 'accepted_negotiation'
+  if (args.webhookFinalRate !== undefined) return 'webhook_extraction'
+  if (args.extractionFinalRate !== undefined) return 'hr_runs_extraction'
+  if (args.impliedListPriceRate !== undefined) return 'list_price_fallback'
+  return 'none'
+}
+
 /**
  * Single classify attempt: backfill from HR, validate, classify, write.
  * Extracted so the BullMQ wrapper stays under the biome cognitive
@@ -481,7 +568,6 @@ async function runClassifyJob(
   const finalNeg = negotiations.at(-1)
   const negotiatedRate = finalNeg?.accepted ? finalNeg.offered_rate : undefined
   const extractionFinalRate = numberFromExtraction(merged.extraction, 'final_rate')
-  const final_rate = negotiatedRate ?? data.final_rate_from_extraction ?? extractionFinalRate
 
   // Post-merge authoritative validation:
   //   1. MC format (cheap, local) -- see validation.ts.
@@ -489,7 +575,8 @@ async function runClassifyJob(
   // These are what the user asked the webhook to enforce: no row
   // ever gets promoted to `booked` if either guard fails.
   const mc_valid = isValidMcFormat(merged.carrier_mc)
-  const load_exists = await checkLoadExists(merged.load_id, { callId: data.call_id, enrich })
+  const load = await lookupLoad(merged.load_id, { callId: data.call_id, enrich })
+  const load_exists = load !== null
 
   const outcome = resolveOutcome({
     ready,
@@ -501,6 +588,18 @@ async function runClassifyJob(
     load_id: merged.load_id,
     carrier_mc: merged.carrier_mc,
   })
+
+  const impliedListPriceRate = computeImpliedListPriceRate({
+    outcome,
+    load,
+    negotiationCount: negotiations.length,
+    negotiatedRate,
+    webhookFinalRate: data.final_rate_from_extraction,
+    extractionFinalRate,
+  })
+
+  const final_rate =
+    negotiatedRate ?? data.final_rate_from_extraction ?? extractionFinalRate ?? impliedListPriceRate
 
   // Authoritative booking gate: promote to `markBooked` only when
   // EVERY prerequisite is met. Missing load, malformed MC, or missing
@@ -514,11 +613,21 @@ async function runClassifyJob(
     merged.load_id !== undefined &&
     final_rate !== undefined
 
+  const final_rate_source = resolveFinalRateSource({
+    negotiatedRate,
+    webhookFinalRate: data.final_rate_from_extraction,
+    extractionFinalRate,
+    impliedListPriceRate,
+  })
+
   enrich({
     mc_valid,
     load_exists,
+    loadboard_rate: load?.loadboard_rate,
+    load_status: load?.status,
     booking_decision: data.booking_decision,
     final_rate_from_extraction: data.final_rate_from_extraction,
+    final_rate_source,
     authoritative_book,
   })
 

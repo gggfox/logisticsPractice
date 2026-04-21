@@ -246,6 +246,18 @@ describe('resolveOutcome', () => {
     expect(resolveOutcome({ ...baseArgs, transcript: 'carrier: accepted at 2100' })).toBe('booked')
   })
 
+  it('treats direct list-price commit language like "book it" as booked', () => {
+    // Reproduces the live HR run where the carrier said "Book it." on
+    // the posted load and the workflow transferred immediately without
+    // ever logging a negotiation or calling `book_load`.
+    expect(
+      resolveOutcome({
+        ...baseArgs,
+        transcript: 'carrier: book it. assistant: thanks for booking with us',
+      }),
+    ).toBe('booked')
+  })
+
   it('declined when load and carrier are known but no booking signal', () => {
     expect(resolveOutcome({ ...baseArgs })).toBe('declined')
   })

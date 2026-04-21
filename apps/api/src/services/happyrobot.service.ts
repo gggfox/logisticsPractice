@@ -11,6 +11,12 @@ async function happyrobotFetch(path: string, options: RequestInit = {}): Promise
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${config.happyrobot.apiKey}`,
+      // `platform.happyrobot.ai/api/v1/*` 400s without this. Without
+      // it the 400 response is indistinguishable from "run id not
+      // found" (happyrobotFetch maps both to `null`) so the classify
+      // worker silently loses the backfill every time. See
+      // docs/happyrobot-setup.md §11.
+      'x-organization-id': config.happyrobot.orgId,
       ...options.headers,
     },
     signal: AbortSignal.timeout(15_000),
@@ -143,12 +149,32 @@ function nameLooksLike(name: string | undefined, needles: readonly string[]): bo
   return needles.some((n) => lower.includes(n))
 }
 
+/**
+ * HR uses two name shapes across their APIs:
+ *   - older flat fixtures: a single `name` field (e.g. `"Classify"`)
+ *   - live `/api/v1/runs/:id` responses: split `integration_name` +
+ *     `event_name` (e.g. `integration_name: "AI"`, `event_name:
+ *     "Classify"`). We join them with a space so a single
+ *     `includes('classif')` match works across both.
+ *
+ * `type` is also matched so synthetic events (`type: 'action'`,
+ * `type: 'session'`) can still be located by the matchers that care
+ * about type rather than name.
+ */
+function eventMatchText(ev: HappyRobotRunEvent): string {
+  const obj = ev as Record<string, unknown>
+  const integration = typeof obj.integration_name === 'string' ? obj.integration_name : ''
+  const eventName = typeof obj.event_name === 'string' ? obj.event_name : ''
+  const parts = [ev.name, integration, eventName, ev.type].filter((s): s is string => Boolean(s))
+  return parts.join(' ')
+}
+
 function firstEventMatching(
   events: readonly HappyRobotRunEvent[],
   needles: readonly string[],
 ): HappyRobotRunEvent | undefined {
   for (const ev of events) {
-    if (nameLooksLike(ev.name, needles) || nameLooksLike(ev.type, needles)) return ev
+    if (nameLooksLike(eventMatchText(ev), needles)) return ev
   }
   return undefined
 }
@@ -160,6 +186,135 @@ function eventPayload(ev: HappyRobotRunEvent | undefined): Record<string, unknow
   // takes precedence when both are present. Spreading `undefined` is a
   // no-op in JS so we don't need an `?? {}` guard.
   return { ...ev.output, ...ev.data }
+}
+
+/**
+ * HR's AI Classify / AI Extract events nest the actual LLM result
+ * under `output.response` (with a sibling `output.input` / `output.prompt`
+ * pair for debugging). `eventPayload` alone surfaces `response` as a
+ * nested object, which top-level string lookups never see -- this
+ * helper returns the `response` subtree so
+ * `resolveRunClassification` / `resolveRunExtraction` can read the
+ * real `classification` / `booking_decision` / `final_rate` fields.
+ */
+function aiNodeResponse(ev: HappyRobotRunEvent | undefined): Record<string, unknown> {
+  const payload = eventPayload(ev)
+  const response = payload.response
+  if (response && typeof response === 'object' && !Array.isArray(response)) {
+    return response as Record<string, unknown>
+  }
+  return {}
+}
+
+/**
+ * HR's variable resolver fires AI nodes the moment their template
+ * inputs would otherwise block -- so when an AI node is wired
+ * downstream of the Voice Agent but HR hasn't yet resolved
+ * `@transcript`, it runs the LLM against the literal string
+ * `"@transcript"`. The LLM dutifully returns "Not interested" /
+ * `booking_decision: "no"` with reasoning like "no transcript
+ * provided". Trusting that output over the real call transcript
+ * keyword scan is strictly worse than ignoring it.
+ *
+ * Two overlapping signals, in priority order:
+ *
+ *   1. Timestamp heuristic (most reliable). If the session event has
+ *      a `timestamp` + `duration`, compute its expected end time. Any
+ *      AI event whose timestamp is earlier than the session end
+ *      clearly ran against stale / empty variable state -- a
+ *      correctly-wired Classify / Extract can only fire AFTER the
+ *      voice session completes.
+ *   2. `output.input` is an unresolved HR variable reference
+ *      (`@transcript`, `@duration`, or `@foo @bar` concatenations).
+ *      Only the Classify node exposes this field today; Extract's
+ *      unresolved templates live inside `output.prompt` and aren't
+ *      inspected -- the timestamp check catches those.
+ *
+ * Either signal is sufficient. A missing timestamp / missing `input`
+ * field is treated as non-stale so older fixtures keep passing.
+ */
+function timestampSeconds(value: unknown): number | undefined {
+  if (typeof value !== 'string' || value.length === 0) return undefined
+  const ms = Date.parse(value)
+  return Number.isFinite(ms) ? ms / 1000 : undefined
+}
+
+function sessionEndSeconds(session: HappyRobotRunEvent | undefined): number | undefined {
+  if (!session) return undefined
+  const start = timestampSeconds(session.timestamp)
+  const raw = (session as Record<string, unknown>).duration
+  const duration = typeof raw === 'number' && Number.isFinite(raw) ? raw : undefined
+  if (start === undefined || duration === undefined) return undefined
+  return start + duration
+}
+
+function isAiNodeStale(
+  ev: HappyRobotRunEvent | undefined,
+  session: HappyRobotRunEvent | undefined,
+): boolean {
+  if (!ev) return false
+
+  const sessionEnd = sessionEndSeconds(session)
+  const eventTs = timestampSeconds(ev.timestamp)
+  if (sessionEnd !== undefined && eventTs !== undefined && eventTs < sessionEnd) {
+    // AI node fired BEFORE the voice session completed -- its inputs
+    // were unresolved regardless of what the output now says. 1s
+    // slop accounts for HR's own clock skew between workers.
+    return eventTs < sessionEnd - 1
+  }
+
+  const payload = eventPayload(ev)
+  const input = payload.input
+  if (typeof input !== 'string') return false
+  const trimmed = input.trim()
+  if (trimmed.length === 0) return true
+  return /^(@[A-Za-z_][\w.]*\s*)+$/.test(trimmed)
+}
+
+/**
+ * Pull the session event (`type: 'session'`) out of the events array.
+ * HR wraps the voice call into a single session-typed event whose
+ * `messages` field is the authoritative transcript and whose
+ * `duration` is the actual call length. Only the last session is
+ * returned; pre-transfer / retry sessions in the same run are
+ * ignored because they don't represent the final call state.
+ */
+function lastSessionEvent(events: readonly HappyRobotRunEvent[]): HappyRobotRunEvent | undefined {
+  let result: HappyRobotRunEvent | undefined
+  for (const ev of events) {
+    if (ev.type === 'session') result = ev
+  }
+  return result
+}
+
+/**
+ * Convert HR session `messages` (chat-completion shape with
+ * `role: 'user' | 'assistant' | 'tool' | 'event'` and `content`) into
+ * our canonical `{role, text}` turns. Drops `event` / `tool` entries
+ * and HR's "Thoughts" stage directions so the synthesized transcript
+ * is only the carrier / agent utterances the keyword scan should see.
+ */
+function speakersFromSessionMessages(
+  session: HappyRobotRunEvent | undefined,
+): SpeakerTurn[] | undefined {
+  if (!session) return undefined
+  const messages = (session as Record<string, unknown>).messages
+  if (!Array.isArray(messages) || messages.length === 0) return undefined
+  const turns: SpeakerTurn[] = []
+  for (const raw of messages) {
+    if (!raw || typeof raw !== 'object') continue
+    const m = raw as Record<string, unknown>
+    const role = typeof m.role === 'string' ? m.role : undefined
+    const content = m.content ?? m.text ?? m.message
+    if (role === 'event' || role === 'tool' || !role) continue
+    if (typeof content !== 'string' || content.trim().length === 0) continue
+    // HR's voice agent injects `<Thoughts>...</Thoughts>` stage
+    // directions into the user channel when the caller is silent.
+    // They'd dominate the keyword scan otherwise.
+    if (content.trim().startsWith('<Thoughts>')) continue
+    turns.push({ role, text: content })
+  }
+  return turns.length > 0 ? turns : undefined
 }
 
 function stringFromObj(
@@ -180,11 +335,25 @@ function numberFromObj(obj: Record<string, unknown>, key: string): number | unde
 
 function resolveRunExtraction(
   parsed: HappyRobotRunResponse,
+  extractResponse: Record<string, unknown>,
   extractPayload: Record<string, unknown>,
   output: Record<string, unknown>,
+  extractStale: boolean,
 ): Record<string, unknown> {
   if (parsed.extraction) return parsed.extraction
   if (parsed.extracted_data) return parsed.extracted_data
+  // HR's actual run shape: the extracted fields live under the Extract
+  // event's `output.response`. The prior fallback returned the whole
+  // event payload (including `prompt`, `input`, `_llm_usage`), which
+  // polluted `stringFromExtraction('reference_number')` with undefined
+  // lookups instead of the real values.
+  if (!extractStale && Object.keys(extractResponse).length > 0) return extractResponse
+  // `extractStale === true` means the Extract node fired against an
+  // unresolved `@transcript` and returned garbage ("no" / "" for
+  // everything). Returning `{}` here lets the webhook-level
+  // `booking_decision` / `final_rate_from_extraction` override it if
+  // HR later ships those directly on the templated body.
+  if (extractStale) return {}
   if (Object.keys(extractPayload).length > 0) return extractPayload
   if (Object.keys(output).length > 0) return output
   return {}
@@ -192,13 +361,22 @@ function resolveRunExtraction(
 
 function resolveRunClassification(
   parsed: HappyRobotRunResponse,
+  classifyResponse: Record<string, unknown>,
   classifyPayload: Record<string, unknown>,
   output: Record<string, unknown>,
+  classifyStale: boolean,
 ): { tag: string | undefined } | undefined {
+  // When the Classify node ran against an unresolved template input
+  // (see `isAiNodeStale`), its "Not interested" verdict is LLM
+  // hallucination from an empty prompt, not a real classification.
+  // Treating the tag as absent lets the worker's keyword scan run
+  // against the authoritative session transcript instead.
+  if (classifyStale) return undefined
   const topTag = parsed.classification?.tag
+  const responseTag = stringFromObj(classifyResponse, 'classification', 'tag')
   const eventTag = stringFromObj(classifyPayload, 'tag', 'classification', 'classification_tag')
   const outputTag = stringFromObj(output, 'classification_tag', 'classify_tag')
-  const tag = topTag ?? eventTag ?? outputTag
+  const tag = topTag ?? responseTag ?? eventTag ?? outputTag
   if (parsed.classification === undefined && tag === undefined) return undefined
   return { tag }
 }
@@ -223,36 +401,70 @@ function resolveRunTranscript(
 
 /**
  * Normalize a HappyRobot runs-API response into the narrow shape the
- * classify and sentiment workers need. Handles three overlapping
+ * classify and sentiment workers need. Handles four overlapping
  * inputs so we never have to branch on "which HR endpoint fed us this":
  *   1. Flat top-level fields (`transcript`, `extraction`, `classification`)
  *      -- used by unit-test fixtures and older HR payloads.
  *   2. Per-node `events` entries, matched by node name (`Classify`,
- *      `Extract`, `Voice Agent`).
- *   3. Aggregate `output` / `outputs` maps with the final session state.
+ *      `Extract`, `Voice Agent`). The Classify / Extract nodes' actual
+ *      LLM output lives under `output.response`, not top-level on the
+ *      event payload.
+ *   3. The session event's `messages` array -- authoritative transcript
+ *      source when HR doesn't surface a flat `transcript` field. This
+ *      is the only path that works on the current `gggfox` workflow.
+ *   4. Aggregate `output` / `outputs` maps with the final session state.
+ *
+ * Staleness: AI Classify / AI Extract events that ran before HR
+ * resolved their `@transcript` input are detected via
+ * `isAiNodeStale` and their outputs suppressed -- keeping a stale
+ * "Not interested" tag from poisoning the outcome resolver.
+ *
  * Pure -- no network, no I/O.
  */
 export function normalizeRun(parsed: HappyRobotRunResponse): HappyRobotCallRun {
   const events = parsed.events ?? []
-  const classifyPayload = eventPayload(firstEventMatching(events, ['classif']))
-  const extractPayload = eventPayload(firstEventMatching(events, ['extract']))
-  // 'voice' only -- don't match bare 'agent', that would pick up
-  // "Reasoning Agent" / other non-voice nodes in workflows that use them.
-  const voicePayload = eventPayload(firstEventMatching(events, ['voice agent', 'voice']))
+  const classifyEvent = firstEventMatching(events, ['classif'])
+  const extractEvent = firstEventMatching(events, ['extract'])
+  const voiceEvent = firstEventMatching(events, ['voice agent', 'voice'])
+  const sessionEvent = lastSessionEvent(events)
+
+  const classifyPayload = eventPayload(classifyEvent)
+  const extractPayload = eventPayload(extractEvent)
+  const voicePayload = eventPayload(voiceEvent)
+  const classifyResponse = aiNodeResponse(classifyEvent)
+  const extractResponse = aiNodeResponse(extractEvent)
+
+  const classifyStale = isAiNodeStale(classifyEvent, sessionEvent)
+  const extractStale = isAiNodeStale(extractEvent, sessionEvent)
 
   const output = parsed.output ?? parsed.outputs ?? {}
 
-  const extraction = resolveRunExtraction(parsed, extractPayload, output)
-  const classification = resolveRunClassification(parsed, classifyPayload, output)
+  const extraction = resolveRunExtraction(
+    parsed,
+    extractResponse,
+    extractPayload,
+    output,
+    extractStale,
+  )
+  const classification = resolveRunClassification(
+    parsed,
+    classifyResponse,
+    classifyPayload,
+    output,
+    classifyStale,
+  )
 
   const speakers =
     extractSpeakersFromPayload(parsed as Record<string, unknown>) ??
-    extractSpeakersFromPayload(voicePayload)
+    extractSpeakersFromPayload(voicePayload) ??
+    speakersFromSessionMessages(sessionEvent)
 
   const transcript = resolveRunTranscript(parsed, extraction, voicePayload, output, speakers)
 
   const duration_seconds =
-    parsed.duration_seconds ?? numberFromObj(voicePayload, 'duration_seconds')
+    parsed.duration_seconds ??
+    numberFromObj(voicePayload, 'duration_seconds') ??
+    (sessionEvent ? numberFromObj(sessionEvent as Record<string, unknown>, 'duration') : undefined)
 
   return {
     transcript,

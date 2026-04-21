@@ -41,6 +41,12 @@ const EnvSchema = z.object({
   // HappyRobot
   HAPPYROBOT_API_KEY: requiredString('HAPPYROBOT_API_KEY'),
   HAPPYROBOT_BASE_URL: optionalStringWithDefault('https://platform.happyrobot.ai'),
+  // Required by every `/api/v1/*` endpoint on platform.happyrobot.ai
+  // (see docs/happyrobot-setup.md §11). Without it, `getRun` returns
+  // 400 -> null, classify worker never hydrates `hr_classify_tag`, and
+  // the load-status flip path silently fails. Required so the server
+  // fails fast at boot rather than fails silently per webhook.
+  HAPPYROBOT_ORG_ID: requiredString('HAPPYROBOT_ORG_ID'),
 
   // Bridge API security
   BRIDGE_API_KEY: requiredString('BRIDGE_API_KEY'),
@@ -127,6 +133,7 @@ export const config = {
   happyrobot: {
     apiKey: env.HAPPYROBOT_API_KEY,
     baseUrl: env.HAPPYROBOT_BASE_URL,
+    orgId: env.HAPPYROBOT_ORG_ID,
   },
 
   bridge: {
@@ -186,6 +193,7 @@ function printBootSummary(): void {
 
   kv('happyrobot.baseUrl', config.happyrobot.baseUrl)
   kv('happyrobot.apiKey', maskSecret(config.happyrobot.apiKey))
+  kv('happyrobot.orgId', config.happyrobot.orgId)
 
   kv('bridge.apiKey', maskSecret(config.bridge.apiKey))
   kv('bridge.adminKey', maskSecret(config.bridge.adminKey))

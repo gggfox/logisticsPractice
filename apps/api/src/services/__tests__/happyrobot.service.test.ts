@@ -231,3 +231,161 @@ describe('normalizeRun — events-shape from /api/v1/runs/:run_id', () => {
     expect(normalized.classification).toStrictEqual({ tag: 'Success' })
   })
 })
+
+describe('normalizeRun — live HR shape (output.response nesting)', () => {
+  // HR's actual /api/v1/runs/:id shape puts the AI-node LLM output
+  // under `output.response`, not at the top of the event data. A run
+  // captured off `gggfox` workflow v9 verified this -- the original
+  // normalizer couldn't see the tag and returned `classification:
+  // undefined`, masking stale outputs as legitimately absent.
+
+  it('reads classification from Classify event output.response.classification', () => {
+    const normalized = normalizeRun(
+      HappyRobotRunResponseSchema.parse({
+        events: [
+          {
+            integration_name: 'AI',
+            event_name: 'Classify',
+            output: {
+              input: 'agent: hi\ncarrier: Book it.',
+              response: {
+                classification: 'Success',
+                reasoning: 'Carrier said "Book it."',
+              },
+            },
+          },
+        ],
+      }),
+    )
+    expect(normalized.classification).toStrictEqual({ tag: 'Success' })
+  })
+
+  it('reads booking_decision from Extract event output.response', () => {
+    const normalized = normalizeRun(
+      HappyRobotRunResponseSchema.parse({
+        events: [
+          {
+            integration_name: 'AI',
+            event_name: 'Extract',
+            output: {
+              input: 'agent: hi\ncarrier: Book it.',
+              response: {
+                mc_number: '264184',
+                booking_decision: 'yes',
+                final_rate: '1661',
+                reference_number: 'LOAD-1003',
+              },
+            },
+          },
+        ],
+      }),
+    )
+    expect(normalized.extraction.booking_decision).toBe('yes')
+    expect(normalized.extraction.final_rate).toBe('1661')
+    expect(normalized.extraction.mc_number).toBe('264184')
+  })
+
+  it('synthesizes transcript from session.messages when no flat transcript exists', () => {
+    const normalized = normalizeRun(
+      HappyRobotRunResponseSchema.parse({
+        events: [
+          {
+            type: 'session',
+            duration: 144,
+            messages: [
+              { role: 'assistant', content: 'How can I help?' },
+              { role: 'user', content: 'Load 1004.' },
+              { role: 'tool', content: '{"load_id":"LOAD-1004"}' },
+              { role: 'user', content: 'Book it.' },
+              { role: 'event', content: 'user_joined' },
+              {
+                role: 'user',
+                content: '<Thoughts>Try to resume the conversation.</Thoughts>.',
+              },
+              { role: 'assistant', content: 'Thanks for booking with us!' },
+            ],
+          },
+        ],
+      }),
+    )
+    expect(normalized.transcript).toContain('Book it.')
+    expect(normalized.transcript).toContain('Thanks for booking with us!')
+    // Tool + event + Thoughts entries must not pollute the keyword scan.
+    expect(normalized.transcript).not.toContain('user_joined')
+    expect(normalized.transcript).not.toContain('Thoughts')
+    expect(normalized.transcript).not.toContain('LOAD-1004')
+    expect(normalized.duration_seconds).toBe(144)
+    expect(normalized.speakers?.length).toBeGreaterThan(0)
+  })
+
+  it('discards stale Classify tag when input was an unresolved @transcript template', () => {
+    // Reproduces the current gggfox v9 bug: Classify ran the moment
+    // its `@transcript` input was referenced, before the Voice Agent
+    // populated it. HR's variable resolver passed the literal string
+    // "@transcript" to the LLM, which returned "Not interested". The
+    // worker must treat this as absent so the keyword scan runs
+    // against the real session transcript instead.
+    const normalized = normalizeRun(
+      HappyRobotRunResponseSchema.parse({
+        events: [
+          {
+            integration_name: 'AI',
+            event_name: 'Classify',
+            output: {
+              input: '@transcript',
+              response: { classification: 'Not interested' },
+            },
+          },
+        ],
+      }),
+    )
+    expect(normalized.classification).toBeUndefined()
+  })
+
+  it('discards stale Extract output and returns empty extraction', () => {
+    const normalized = normalizeRun(
+      HappyRobotRunResponseSchema.parse({
+        events: [
+          {
+            integration_name: 'AI',
+            event_name: 'Extract',
+            output: {
+              input: '@transcript @duration',
+              response: { booking_decision: 'no', mc_number: '' },
+            },
+          },
+        ],
+      }),
+    )
+    // An empty extraction lets webhook-level booking_decision / the
+    // negotiation ledger drive the outcome instead of a hallucinated "no".
+    expect(normalized.extraction).toStrictEqual({})
+  })
+
+  it('honors a non-stale Classify event even when a sibling Extract was stale', () => {
+    const normalized = normalizeRun(
+      HappyRobotRunResponseSchema.parse({
+        events: [
+          {
+            integration_name: 'AI',
+            event_name: 'Classify',
+            output: {
+              input: 'agent: hi\ncarrier: Book it.',
+              response: { classification: 'Success' },
+            },
+          },
+          {
+            integration_name: 'AI',
+            event_name: 'Extract',
+            output: {
+              input: '@transcript',
+              response: { booking_decision: 'no' },
+            },
+          },
+        ],
+      }),
+    )
+    expect(normalized.classification).toStrictEqual({ tag: 'Success' })
+    expect(normalized.extraction).toStrictEqual({})
+  })
+})
