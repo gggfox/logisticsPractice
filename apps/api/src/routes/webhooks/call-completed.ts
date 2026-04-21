@@ -182,7 +182,7 @@ export function normalizeCallEvent(raw: Record<string, unknown>): NormalizedCall
     new Date().toISOString()
   const ended_at = pickString(inner.ended_at) ?? envelope.status_updated_at
 
-  return {
+  const normalized = {
     call_id,
     status,
     carrier_mc,
@@ -207,6 +207,8 @@ export function normalizeCallEvent(raw: Record<string, unknown>): NormalizedCall
     vars,
     raw,
   }
+  console.log('normalized', JSON.stringify(normalized, null, 2))
+  return normalized
 }
 
 function resolveSignatureState(req: FastifyRequest): 'valid' | 'invalid' | 'absent' {
@@ -340,7 +342,10 @@ const callCompletedRoute: FastifyPluginAsync = async (app) => {
       // the rest avoids creating a stream of partial `calls` rows and
       // tells HappyRobot the delivery succeeded.
       if (!normalized.is_terminal) {
-        enrichWideEvent(req, { enqueued: false, skip_reason: 'non_terminal_status' })
+        enrichWideEvent(req, {
+          enqueued: false,
+          skip_reason: 'non_terminal_status',
+        })
         return { received: true as const }
       }
 
@@ -349,7 +354,10 @@ const callCompletedRoute: FastifyPluginAsync = async (app) => {
       // row would be pure noise. Ack 200 so HR doesn't retry, but skip
       // the Convex write.
       if (normalized.call_id === 'unknown') {
-        enrichWideEvent(req, { enqueued: false, skip_reason: 'no_correlation_id' })
+        enrichWideEvent(req, {
+          enqueued: false,
+          skip_reason: 'no_correlation_id',
+        })
         return { received: true as const }
       }
 
