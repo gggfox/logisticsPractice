@@ -31,6 +31,26 @@ function pickString(...values: unknown[]): string | undefined {
   return undefined
 }
 
+/**
+ * Like `pickString`, but also accepts a finite positive number and coerces
+ * it to its decimal string. HappyRobot's templated Webhook body resolves
+ * numeric agent variables (`@mc_number`, sometimes `@load_id`) into raw
+ * JSON numbers, not strings:
+ *
+ *   { "mc_number": 264184 }   // not "264184"
+ *
+ * `carrier_mc` downstream is a `string`, so we coerce at the boundary.
+ * Non-positive / non-finite numbers (`0`, `-1`, `NaN`) are rejected so a
+ * miswired template can't smuggle a junk id through.
+ */
+function pickIdString(...values: unknown[]): string | undefined {
+  for (const v of values) {
+    if (typeof v === 'string' && v.length > 0) return v
+    if (typeof v === 'number' && Number.isFinite(v) && v > 0) return String(v)
+  }
+  return undefined
+}
+
 function pickNumber(...values: unknown[]): number | undefined {
   for (const v of values) {
     if (typeof v === 'number' && Number.isFinite(v)) return v
@@ -102,14 +122,20 @@ export function normalizeCallEvent(raw: Record<string, unknown>): NormalizedCall
     (inner.extracted_data as Record<string, unknown> | undefined) ??
     (inner.extraction as Record<string, unknown> | undefined)
 
-  const carrier_mc = pickString(
+  // `inner.mc_number` covers the current HR templated webhook body, which
+  // ships the MC at the top level as `mc_number` (not `carrier_mc`) and
+  // often as a raw JSON number because `@mc_number` in HR agent state is
+  // numeric. Without it, every prod call lands with `carrier_mc: "unknown"`
+  // and drops out of the booking gate -- see docs/happyrobot-setup.md §9.1.
+  const carrier_mc = pickIdString(
     inner.carrier_mc,
+    inner.mc_number,
     vars.carrier_mc,
     vars.mc_number,
     extracted_data?.carrier_mc,
     extracted_data?.mc_number,
   )
-  const load_id = pickString(
+  const load_id = pickIdString(
     inner.load_id,
     vars.load_id,
     vars.reference_number,

@@ -352,4 +352,34 @@ describe('normalizeCallEvent', () => {
     const n = normalizeCallEvent(raw)
     expect(n.carrier_mc).toBe('264184')
   })
+
+  it('accepts top-level mc_number as a number (HR templated @mc_number)', () => {
+    // Reproduces the sparse templated body we saw in prod when HR's
+    // Webhook node templates `@mc_number` (numeric agent variable) at the
+    // top level of the body. `pickString` used to reject the number and
+    // `carrier_mc` ended up `undefined`, which the classify worker
+    // defaulted to `"unknown"` -- every call dropped at the booking gate.
+    const raw = {
+      load_id: 'LOAD-1004',
+      mc_number: 264184,
+      session_id: '69d2a3b0-4be9-4ae0-997e-a9b19483c03e',
+      offered_rate: '',
+    }
+    const n = normalizeCallEvent(raw)
+    expect(n.call_id).toBe('69d2a3b0-4be9-4ae0-997e-a9b19483c03e')
+    expect(n.carrier_mc).toBe('264184')
+    expect(n.carrier_mc_valid).toBe(true)
+    expect(n.load_id).toBe('LOAD-1004')
+    expect(n.is_terminal).toBe(true)
+  })
+
+  it('rejects non-positive numeric mc_number as undefined', () => {
+    const raw = {
+      call_id: 'sess-1',
+      status: 'completed',
+      mc_number: 0,
+    }
+    const n = normalizeCallEvent(raw)
+    expect(n.carrier_mc).toBeUndefined()
+  })
 })
