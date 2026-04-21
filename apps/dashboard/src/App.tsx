@@ -2,7 +2,6 @@ import { type ReactElement, useEffect, useState } from 'react'
 import { Toaster } from 'sonner'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { Sidebar } from './components/Sidebar'
-import { Topbar } from './components/layout/Topbar'
 import { CallHistoryPage } from './pages/CallHistoryPage'
 import { CarrierIntelPage } from './pages/CarrierIntelPage'
 import { LoadBoardPage } from './pages/LoadBoardPage'
@@ -32,8 +31,6 @@ export function App() {
     })
   }
 
-  const toggleSidebar = () => setSidebarCollapsed((c) => !c)
-
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
       if (e.key === '[' && !e.metaKey && !e.ctrlKey && !e.altKey) {
@@ -58,7 +55,6 @@ export function App() {
         collapsed={sidebarCollapsed}
       />
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <Topbar onToggleSidebar={toggleSidebar} />
         <main
           className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
           data-testid="page-main"

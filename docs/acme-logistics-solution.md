@@ -1,166 +1,182 @@
-# Acme Logistics: Inbound Carrier Sales Automation
+# Acme Logistics
+
+## Build Description: Inbound Carrier Sales Automation
+
+Prepared for `Acme Logistics`
 
 ## Executive Summary
 
-This document describes a fully automated inbound carrier sales system built for Acme Logistics using the HappyRobot voice AI platform. The solution replaces manual carrier call handling with an AI-powered agent that verifies carriers, matches them to available loads, negotiates pricing, and books freight -- all in real time, 24/7.
+This build gives Acme Logistics a production-oriented take-home implementation of an inbound carrier sales workflow for carriers calling on posted freight. Instead of requiring a broker to handle every first-touch call manually, the system answers inbound calls, qualifies the carrier, identifies the relevant load, manages initial rate discussion inside defined guardrails, and records the outcome in an operations dashboard backed by Convex data.
 
-The system processes inbound carrier calls end-to-end: from FMCSA verification through load matching, price negotiation (up to 3 rounds), and call transfer to a sales representative when a deal is reached. Every interaction is recorded, classified, and fed into a real-time analytics dashboard for operational visibility.
+The intent is not to replace Acme's brokerage team. The intent is to automate repetitive front-end call handling, improve after-hours and overflow coverage, standardize qualification, and give leadership a clearer picture of what is happening across inbound carrier demand.
 
----
+## What Problem This Build Solves
 
-## System Architecture
+Freight brokerages lose time and margin when brokers are forced to spend large parts of the day on repetitive first-touch calls. The same operational pain points show up repeatedly:
 
-```
-Carrier (Phone/Web) --> HappyRobot Voice AI Agent
-                            |
-                    Bridge API (our backend)
-                     /      |       \
-              FMCSA API   Convex DB   Webhooks
-                            |
-                     React Dashboard
-                  (real-time analytics)
-```
+- Inbound calls arrive after hours or during peak volume.
+- Carrier qualification is inconsistent from rep to rep.
+- Posted-load inquiries consume broker time before a load is even confirmed as a fit.
+- Negotiation activity is hard to review after the fact.
+- Managers lack a clean view of call outcomes, booking conversion, and carrier sentiment.
 
-**Core Components:**
+This build addresses those issues by creating a structured, always-on intake layer for inbound carrier sales.
 
-- **HappyRobot Voice Agent**: Handles live carrier conversations using registered API tools
-- **Bridge API (Fastify)**: RESTful endpoints that HappyRobot calls during conversations to verify carriers, search loads, and process negotiations
-- **Convex Database**: Real-time document database with live subscriptions powering the dashboard
-- **Analytics Dashboard**: React-based command center showing KPIs, call history, load board, carrier intelligence, and negotiation analytics
+## What The Build Does
 
----
+### 1. Answers and qualifies inbound carrier calls
 
-## Feature Walkthrough
+The voice agent handles incoming carrier conversations through HappyRobot. It greets the caller, determines whether they are calling about a specific posted load or a lane, and captures the MC number for compliance screening.
 
-### 1. Carrier Verification
+Carrier qualification is performed against FMCSA data in real time so the workflow can screen out ineligible carriers before a broker spends time on the call.
 
-When a carrier calls in, the AI agent asks for their MC number and verifies eligibility in real time via the FMCSA QCMobile API. The system checks:
+### 2. Finds and presents available freight
 
-- Operating authority status (must be "AUTHORIZED")
-- Out-of-service orders
-- Active OOS dates
+Once the carrier is qualified, the system identifies the target load by reference number or by lane and equipment type. It presents the relevant details a carrier would expect to hear on an inbound sales call, including:
 
-Results are cached for 24 hours to reduce external API calls. Ineligible carriers are informed and the call ends gracefully.
+- Origin and destination
+- Pickup and delivery timing
+- Equipment type
+- Weight and commodity
+- Mileage
+- Posted rate
 
-### 2. Load Matching
+This keeps the conversation natural and useful while still following a consistent sales process.
 
-Verified carriers describe their preferred lanes. The system searches available loads by origin, destination, and equipment type with fuzzy city/state matching. Results are sorted by pickup date proximity and presented to the carrier with full details: rate, dates, weight, miles, and commodity.
+### 3. Handles initial negotiation inside guardrails
 
-### 3. Automated Negotiation
+If the carrier asks for a different rate, the workflow can manage the first round of negotiation using broker-defined rules. The current build supports:
 
-If the carrier makes a counter-offer below the posted rate:
+- Automatic acceptance when an offer is within an acceptable margin
+- Structured counteroffers when an offer falls below the threshold
+- Up to three negotiation rounds
+- Logging of each negotiation round for review and reporting
 
-- The system evaluates the offer against a configurable acceptance margin (default: 5% below loadboard rate)
-- If within margin, the offer is accepted immediately
-- If below margin, a counter-offer is calculated using an escalating concession strategy
-- Up to 3 negotiation rounds are supported
-- Each round is logged for analytics and strategy optimization
+When pricing is agreed, the build supports confirming the booking at the agreed rate once it falls within the allowed range. In the current take-home workflow, the final human handoff is simulated rather than executed through a live telephony transfer.
 
-### 4. Call Classification and Sentiment Analysis
+### 4. Captures the complete call record
 
-After each call completes, the system automatically:
+After the call ends, the system processes the webhook payload, normalizes the data, and stores the information needed for operations and reporting. That includes:
 
-- Classifies the outcome (booked, declined, no match, transferred, dropped)
-- Analyzes carrier sentiment from the transcript (positive, neutral, negative, frustrated)
-- Records all data for the analytics dashboard
+- Call transcript
+- Call status and duration
+- Carrier MC number
+- Load reference
+- Booking outcome
+- Negotiation rounds
+- Sentiment and call classification
 
-### 5. Real-Time Analytics Dashboard
+This creates a usable audit trail instead of leaving valuable information buried in call recordings or broker notes.
 
-The dashboard provides five views with live data:
+### 5. Feeds a live brokerage dashboard
 
-| View | Purpose |
-|------|---------|
-| **Overview** | KPI cards, call volume trends, outcome distribution, sentiment breakdown |
-| **Call History** | Filterable table with transcript access and CSV export |
-| **Load Board** | Active loads with geographic map visualization |
-| **Carrier Intelligence** | Carrier verification status, call history, booking rates |
-| **Negotiation Analytics** | Round distribution, acceptance rates, rate comparison charts |
+The build includes a dashboard for the operations team so Acme can monitor the system as calls happen. The dashboard is designed to answer the questions a brokerage leadership team cares about:
 
-All views update in real time via Convex database subscriptions -- no polling, no manual refresh.
+- How many inbound calls are we receiving?
+- How many are being booked, declined, transferred, or lost?
+- Which loads are attracting demand?
+- Which carriers are calling most often?
+- How is negotiation performance trending over time?
 
----
+Operational views update live through Convex queries, while summary metrics are aggregated on an hourly schedule. That gives supervisors timely visibility without relying on manual reporting or exported spreadsheets.
 
-## Security Posture
+## End-To-End Workflow
 
-| Layer | Implementation |
-|-------|---------------|
-| **Transport** | HTTPS enforced (Railway automatic TLS / Let's Encrypt) |
-| **API Authentication** | API key required on all endpoints (`x-api-key` header) |
-| **Webhook Integrity** | HMAC-SHA256 signature verification on all incoming webhooks |
-| **Rate Limiting** | Sliding window limiter (100 req/min per API key) |
-| **Secret Management** | All credentials in environment variables, never in code |
-| **CORS** | Restricted to dashboard origin only |
-| **Container Security** | Non-root user in Docker, minimal Alpine image (~80MB) |
+1. A carrier calls Acme about a posted load.
+2. The voice agent collects the reference number or asks for lane and equipment details.
+3. The workflow asks for the MC number and verifies the carrier against FMCSA data.
+4. The system locates the matching load and presents shipment details.
+5. The carrier either accepts the posted rate or begins negotiation.
+6. The workflow confirms the booking within guardrails and, in the current take-home version, simulates the final handoff to a human rep.
+7. The completed call is recorded, classified, and made visible in the dashboard.
 
----
+## What Acme Receives In This Build
 
-## Infrastructure and Deployment
+This build includes the working system slice needed to demonstrate the workflow end to end:
 
-- **Containerization**: Multi-stage Docker build producing a minimal production image
-- **Cloud Hosting**: Railway (automatic HTTPS, Docker deployment, usage-based billing)
-- **Infrastructure as Code**: Terraform configuration for reproducible deployments
-- **CI/CD**: GitHub Actions pipeline with lint, typecheck, unit tests, E2E tests, and automated deployment
-- **Database**: Convex (managed, serverless, ACID-compliant, real-time subscriptions)
+- An inbound voice workflow configured for freight-style carrier calls
+- A secured Bridge API for carrier verification, load lookup, negotiation, booking, and webhook intake
+- A live dashboard for calls, loads, carrier activity, and negotiation reporting, with Convex-backed views and scheduled summary metrics
+- Logging, metrics, and traceability for operational support
+- Containerized deployment and CI automation for repeatable validation and hosting
+- Supporting technical documentation for setup and maintenance
 
-### Deployment Cost Estimate
+## Operating Model
 
-| Component | Monthly Cost |
-|-----------|-------------|
-| Railway API service | ~$5-10 |
-| Convex (free tier) | $0 |
-| Dashboard hosting | $0 (Vercel free tier or Railway) |
-| **Total** | **~$5-10/month** |
+This solution is best suited for:
 
----
+- After-hours load coverage
+- Overflow call handling during busy brokerage windows
+- Standardized qualification for posted-load inquiries
+- Faster first response on carrier demand
+- Cleaner reporting on negotiation behavior and booking conversion
 
-## Scaling Considerations
+It should be viewed as a broker-assist system rather than a full TMS replacement. Human brokers remain important for exceptions, relationship-managed freight, customer-specific pricing decisions, and edge cases that should not be automated.
 
-The architecture is designed to scale with Acme Logistics' growth:
+## Technical Implementation Overview
 
-- **BullMQ queues behind Fastify webhook routes** decouple call processing from API response times
-- **Convex** handles concurrent real-time subscriptions across multiple dashboard users
-- **Hourly metric aggregation** ensures dashboard performance remains constant regardless of call volume
-- **Carrier cache** reduces FMCSA API dependency from every call to once per carrier per day
-- **Terraform modules** are portable to AWS ECS Fargate if Railway capacity is exceeded
+The build uses a practical, production-oriented architecture for a take-home implementation:
 
----
+- **Voice layer:** HappyRobot manages the live carrier conversation.
+- **Application layer:** A Fastify-based Bridge API handles qualification, load search, negotiation, booking, and webhook processing.
+- **Data layer:** Convex stores loads, calls, negotiations, and metrics, and powers live dashboard views plus scheduled summary rollups.
+- **Dashboard:** A React-based web application gives operations and leadership immediate visibility into activity and outcomes.
+- **Async processing:** Background workers handle post-call enrichment, classification, and metric aggregation.
+- **Observability:** OpenTelemetry and SigNoz provide traces, metrics, and structured logs for support and troubleshooting.
 
-## Technology Stack
+The result is a system that is fast enough for live call workflows, instrumented enough to explain its behavior, and structured so it could be hardened further for a production rollout.
 
-| Layer | Technology | Rationale |
-|-------|-----------|-----------|
-| Voice AI | HappyRobot | Purpose-built for freight, Bridge API integration |
-| Backend | Fastify + BullMQ + Croner (Node.js) | Typed routes with Zod validation, BullMQ-backed async processing, cron scheduling, OTel auto-instrumentation |
-| Database | Convex | Real-time subscriptions, end-to-end TypeScript, zero config |
-| Frontend | React + Tremor + Recharts | Production-ready dashboard components, dark mode |
-| Validation | Zod | Single source of truth for types and runtime validation |
-| Maps | Leaflet | Open-source geographic visualization |
-| Testing | Vitest + Playwright | Fast unit/component tests + reliable E2E |
-| IaC | Terraform (Railway) | Declarative, version-controlled infrastructure |
-| CI/CD | GitHub Actions | Automated lint, test, build, deploy pipeline |
-| Container | Docker (multi-stage) | Portable, minimal production images |
+## Security And Operational Controls
 
----
+The build includes several controls that make the implementation operationally credible:
 
-## Getting Started
+- HTTPS at public endpoints
+- API-key protection on application routes
+- Optional webhook-signature telemetry alongside API-key auth
+- Rate limiting to protect the API surface
+- Secrets managed through environment variables rather than code
+- Restricted API CORS origin handling for the dashboard
+- Containerized API deployment with a non-root runtime
+- Structured logging and operational telemetry for auditability
 
-```bash
-# Clone and install
-git clone <repo-url> && cd logisticsPractice
-pnpm install
+The main gaps before a live rollout are the intentionally open Convex/dashboard access model used for this take-home and the fact that webhook signatures are recorded as telemetry rather than enforced authentication. Those are acceptable for a synthetic-data exercise, but they would need hardening before production.
 
-# Set up environment
-cp .env.example .env
-# Fill in API keys
+## Hosting And Deployment
 
-# Seed demo data
-npx tsx scripts/seed.ts
+The current deployment model is container-based and intentionally straightforward:
 
-# Start development
-pnpm dev
+- The API and dashboard run as separate services
+- Deployment targets a Hostinger VPS managed through Dokploy
+- GitHub Actions runs linting, type safety, tests, and builds on pushes and pull requests
+- Dokploy rebuilds and redeploys the services on push to `main`, with post-deploy health verification handled in GitHub Actions
+- Health checks and monitoring are built into the deployment workflow
 
-# Run tests
-pnpm test
-```
+This gives Acme a simple operating footprint without requiring a heavy internal platform team.
 
-See `docs/happyrobot-setup.md` for HappyRobot platform configuration instructions.
+## Inputs Required From Acme Logistics
+
+To move from build completion to live production use, Acme would need to provide or approve:
+
+- HappyRobot account and workflow access
+- Production API keys and environment configuration
+- The source of truth for active load inventory
+- Negotiation tolerance and pricing rules
+- Transfer policy or phone routing for human handoff
+- Preferred greeting, branding, and escalation language
+
+## Recommended Phase Two Options
+
+If Acme wants to expand beyond the initial build, the next logical enhancements would be:
+
+- TMS integration so booked loads sync into the brokerage's core operating system
+- Broker or team-based routing rules
+- Customer-specific pricing rules and load prioritization
+- Carrier allowlists, blocklists, and compliance exceptions
+- Expanded reporting around lane demand, coverage gaps, and rep handoff quality
+- Additional channels such as SMS follow-up or outbound reactivation
+
+## Closing Statement
+
+In practical terms, this build gives Acme Logistics a digital front line for inbound carrier sales. It qualifies callers, protects broker time, captures negotiation intelligence, and gives the team a live operating view of what is happening across load inquiries.
+
+For a freight broker, the value is simple: more coverage, more consistency, better visibility, and fewer missed opportunities on inbound demand.
