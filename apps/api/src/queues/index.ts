@@ -98,6 +98,12 @@ export const ClassifyCallInputSchema = z.object({
   // fixtures and pre-extraction deliveries still enqueue cleanly.
   booking_decision: z.enum(['yes', 'no']).optional(),
   final_rate_from_extraction: z.number().positive().optional(),
+  // AI Classify tag lifted off the webhook body (`classification.tag` /
+  // flat `classification_tag`). When HR's templated per-node webhook
+  // ships it we skip the runs-API round-trip; when it doesn't, the
+  // runs-API backfill still populates `hr_classify_tag` downstream.
+  // Priority: webhook-ship > runs-API > undefined.
+  classification_tag: z.string().optional(),
 })
 export type ClassifyCallInput = z.infer<typeof ClassifyCallInputSchema>
 

@@ -8,7 +8,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod'
 import { z } from 'zod'
 import { bookingOutcomeCounter } from '../../observability/metrics.js'
 import { enrichWideEvent } from '../../observability/wide-event-store.js'
-import { convexService } from '../../services/convex.service.js'
+import { attemptBookLoad } from '../../services/book-load.service.js'
 import { ErrorBodySchema } from '../_error-schema.js'
 import { HR_SESSION_HEADER, resolveCallId } from './_call-id.js'
 
@@ -73,90 +73,87 @@ const bookLoadRoute: FastifyPluginAsync = async (app) => {
       enrichWideEvent(req, { call_id })
 
       try {
-        const load = await convexService.loads.getByLoadId(load_id)
-        if (!load) {
-          enrichWideEvent(req, { failure_stage: 'load_not_found' })
-          return reply.code(404).send({
-            error: 'Not Found',
-            message: `Load ${load_id} not found`,
-            statusCode: 404,
-          })
-        }
-
-        enrichWideEvent(req, {
-          loadboard_rate: load.loadboard_rate,
-          load_status: load.status,
-        })
-
-        // The load is already booked / expired / mid-negotiation.
-        // Returning 409 is cleaner than a silent 200 because HR's workflow
-        // treats non-2xx as a tool failure and surfaces it to the caller
-        // instead of pretending the booking succeeded.
-        if (load.status !== 'available' && load.status !== 'in_negotiation') {
-          enrichWideEvent(req, { failure_stage: 'load_not_bookable' })
-          return reply.code(409).send({
-            error: 'Conflict',
-            message: `Load ${load_id} is not bookable (status: ${load.status}).`,
-            statusCode: 409,
-          })
-        }
-
-        // Rate guard: HR's LLM fills `agreed_rate` from the conversation,
-        // so a hallucinated $900 on a $3k load would otherwise book
-        // silently. `[loadboard_rate * (1 - margin%), loadboard_rate]`
-        // matches the same margin the offer negotiator uses for auto-accept.
-        const minAcceptableRate = load.loadboard_rate * (1 - OFFER_ACCEPT_MARGIN_PERCENT / 100)
-        if (agreed_rate < minAcceptableRate || agreed_rate > load.loadboard_rate) {
-          enrichWideEvent(req, {
-            failure_stage: 'rate_out_of_bounds',
-            min_acceptable_rate: minAcceptableRate,
-          })
-          req.log.warn(
-            { call_id, load_id, agreed_rate, loadboard_rate: load.loadboard_rate },
-            'book_load: agreed_rate outside acceptable margin; rejecting to prevent low-ball booking',
-          )
-          return reply.code(422).send({
-            error: 'Unprocessable Entity',
-            message: `Agreed rate $${agreed_rate} is outside the acceptable range [$${Math.round(
-              minAcceptableRate,
-            )}, $${load.loadboard_rate}] for load ${load_id}.`,
-            statusCode: 422,
-          })
-        }
-
-        const now = new Date().toISOString()
-        await convexService.loads.updateStatus(load_id, 'booked')
-
-        // Authoritative booking write: forces `outcome: 'booked'` along
-        // with `carrier_mc` / `load_id` / `final_rate` so the call row
-        // can never show a booked load with `carrier_mc: 'unknown'` or
-        // an earlier classify-written `dropped`. `upsertFromOffer` would
-        // silently keep the older outcome; `markBooked` is purpose-built
-        // to close that hole.
-        await convexService.calls.markBooked({
+        // Shared with the classify-call worker's post-webhook auto-book
+        // path so both entrypoints apply the same guards (load state,
+        // rate bounds). See `apps/api/src/services/book-load.service.ts`.
+        const result = await attemptBookLoad({
           call_id,
           load_id,
           carrier_mc,
-          final_rate: agreed_rate,
-          started_at: now,
-          ended_at: now,
-        })
-
-        bookingOutcomeCounter.add(1, { result: 'accepted_after_max_rounds' })
-
-        enrichWideEvent(req, {
-          booked: true,
-          final_rate: agreed_rate,
-          discount_percent: ((load.loadboard_rate - agreed_rate) / load.loadboard_rate) * 100,
-        })
-
-        return {
-          booked: true,
-          load_id,
-          call_id,
           agreed_rate,
-          loadboard_rate: load.loadboard_rate,
-          message: `Load ${load_id} booked at $${agreed_rate}.`,
+        })
+
+        if (result.booked) {
+          bookingOutcomeCounter.add(1, { result: 'accepted_after_max_rounds' })
+          enrichWideEvent(req, {
+            loadboard_rate: result.loadboard_rate,
+            booked: true,
+            final_rate: result.final_rate,
+            discount_percent: result.discount_percent,
+            load_status_updated: result.load_status_updated,
+          })
+          return {
+            booked: true,
+            load_id,
+            call_id,
+            agreed_rate: result.final_rate,
+            loadboard_rate: result.loadboard_rate,
+            message: `Load ${load_id} booked at $${result.final_rate}.`,
+          }
+        }
+
+        // Map structured service failures onto the HTTP response shape
+        // HR's workflow already understands. Keeping the switch
+        // exhaustive so a new `reason` variant fails typecheck until
+        // it's mapped -- silently returning 500 on a new reason would
+        // hide the very failure modes the classify worker also sees.
+        switch (result.reason) {
+          case 'load_not_found':
+            enrichWideEvent(req, { failure_stage: 'load_not_found' })
+            return reply.code(404).send({
+              error: 'Not Found',
+              message: `Load ${load_id} not found`,
+              statusCode: 404,
+            })
+          case 'already_booked':
+            enrichWideEvent(req, {
+              failure_stage: 'load_not_bookable',
+              loadboard_rate: result.loadboard_rate,
+              load_status: 'booked',
+            })
+            return reply.code(409).send({
+              error: 'Conflict',
+              message: `Load ${load_id} is not bookable (status: booked).`,
+              statusCode: 409,
+            })
+          case 'load_not_bookable':
+            enrichWideEvent(req, {
+              failure_stage: 'load_not_bookable',
+              loadboard_rate: result.loadboard_rate,
+              load_status: result.load_status,
+            })
+            return reply.code(409).send({
+              error: 'Conflict',
+              message: `Load ${load_id} is not bookable (status: ${result.load_status}).`,
+              statusCode: 409,
+            })
+          case 'rate_out_of_bounds':
+            enrichWideEvent(req, {
+              failure_stage: 'rate_out_of_bounds',
+              loadboard_rate: result.loadboard_rate,
+              min_acceptable_rate: result.min_acceptable_rate,
+            })
+            req.log.warn(
+              { call_id, load_id, agreed_rate, loadboard_rate: result.loadboard_rate },
+              'book_load: agreed_rate outside acceptable margin; rejecting to prevent low-ball booking',
+            )
+            return reply.code(422).send({
+              error: 'Unprocessable Entity',
+              message: `Agreed rate $${agreed_rate} is outside the acceptable range [$${Math.round(
+                result.min_acceptable_rate,
+              )}, $${result.loadboard_rate}] for load ${load_id}.`,
+              statusCode: 422,
+            })
         }
       } catch (err) {
         enrichWideEvent(req, { failure_stage: 'book_load_processing' })

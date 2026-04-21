@@ -419,4 +419,63 @@ describe('normalizeCallEvent', () => {
     expect(n.booking_decision).toBe('yes')
     expect(n.final_rate_from_extraction).toBe(2100)
   })
+
+  it('pulls classification.tag from the nested shape documented in §9.1', () => {
+    // HR's documented per-node webhook body nests the tag under a
+    // `classification` object. The worker uses this tag to promote the
+    // outcome to `booked` via `outcomeFromHrTag`, which is what
+    // eventually flips the load-board status.
+    const raw = {
+      session_id: 'sess-1',
+      status: 'completed',
+      classification: { tag: 'Success' },
+    }
+    const n = normalizeCallEvent(raw)
+    expect(n.classification_tag).toBe('Success')
+  })
+
+  it('accepts classification as a raw string on flat HR templates', () => {
+    const raw = {
+      session_id: 'sess-1',
+      status: 'completed',
+      classification: 'Rate too high',
+    }
+    const n = normalizeCallEvent(raw)
+    expect(n.classification_tag).toBe('Rate too high')
+  })
+
+  it('accepts flat classification_tag alias and trims whitespace', () => {
+    const raw = {
+      session_id: 'sess-1',
+      status: 'completed',
+      classification_tag: '  Not interested  ',
+    }
+    const n = normalizeCallEvent(raw)
+    expect(n.classification_tag).toBe('Not interested')
+  })
+
+  it('leaves classification_tag undefined when the body has no tag', () => {
+    const raw = {
+      session_id: 'sess-1',
+      status: 'completed',
+      mc_number: 264184,
+      load_id: 'LOAD-1003',
+    }
+    const n = normalizeCallEvent(raw)
+    expect(n.classification_tag).toBeUndefined()
+  })
+
+  it('treats an empty-string classification tag as absent', () => {
+    // HR resolves unresolved template variables to `""`. We must not
+    // let that empty string ride through as a tag -- `outcomeFromHrTag`
+    // would return undefined anyway, but the wide-event would get a
+    // spurious low-signal value.
+    const raw = {
+      session_id: 'sess-1',
+      status: 'completed',
+      classification: { tag: '' },
+    }
+    const n = normalizeCallEvent(raw)
+    expect(n.classification_tag).toBeUndefined()
+  })
 })

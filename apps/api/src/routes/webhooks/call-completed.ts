@@ -70,6 +70,7 @@ interface NormalizedCallEvent {
   extracted_data: Record<string, unknown> | undefined
   booking_decision: 'yes' | 'no' | undefined
   final_rate_from_extraction: number | undefined
+  classification_tag: string | undefined
   carrier_mc_valid: boolean
   load_id_plausible: boolean
   is_terminal: boolean
@@ -78,6 +79,30 @@ interface NormalizedCallEvent {
   envelope: ReturnType<typeof unwrapCloudEventPayload>
   vars: Record<string, unknown>
   raw: Record<string, unknown>
+}
+
+/**
+ * HR's AI Classify node output lands in the webhook body in one of
+ * three templates we've seen:
+ *   - `classification.tag: "Success"` (§9.1 nested shape from the docs)
+ *   - `classification_tag: "Success"` (flat alias some workflows use)
+ *   - `classification: "Success"` (raw string on flat templates)
+ * Empty strings are treated as absent so a templated webhook whose
+ * source variable never resolved doesn't smuggle `""` into downstream
+ * outcome resolution.
+ */
+function extractClassificationTag(inner: Record<string, unknown>): string | undefined {
+  const classification = inner.classification
+  if (typeof classification === 'string' && classification.trim().length > 0) {
+    return classification.trim()
+  }
+  if (classification && typeof classification === 'object' && !Array.isArray(classification)) {
+    const tag = (classification as Record<string, unknown>).tag
+    if (typeof tag === 'string' && tag.trim().length > 0) return tag.trim()
+  }
+  const flat = inner.classification_tag
+  if (typeof flat === 'string' && flat.trim().length > 0) return flat.trim()
+  return undefined
 }
 
 /**
@@ -172,6 +197,7 @@ export function normalizeCallEvent(raw: Record<string, unknown>): NormalizedCall
     // the booking gate. Nested extraction wins when both are present.
     booking_decision: extractBookingDecision(extracted_data) ?? extractBookingDecision(inner),
     final_rate_from_extraction: extractFinalRate(extracted_data) ?? extractFinalRate(inner),
+    classification_tag: extractClassificationTag(inner),
     carrier_mc_valid: carrier_mc === undefined || isValidMcFormat(carrier_mc),
     load_id_plausible: load_id === undefined || isPlausibleLoadId(load_id),
     is_terminal: isTerminalStatus(envelope.status_current),
@@ -224,6 +250,7 @@ function enrichWebhookEvent(
     has_extracted_data: n.extracted_data !== undefined,
     booking_decision: n.booking_decision,
     final_rate_from_extraction: n.final_rate_from_extraction,
+    classification_tag: n.classification_tag,
     carrier_mc_valid: n.carrier_mc_valid,
     load_id_plausible: n.load_id_plausible,
   })
@@ -258,6 +285,7 @@ async function enqueueClassifyJobs(n: NormalizedCallEvent): Promise<void> {
         extracted_data: n.extracted_data,
         booking_decision: n.booking_decision,
         final_rate_from_extraction: n.final_rate_from_extraction,
+        classification_tag: n.classification_tag,
       },
       { delay: 3_000 },
     ),

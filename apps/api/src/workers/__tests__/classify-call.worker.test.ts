@@ -106,6 +106,27 @@ describe('mergeRunIntoInput', () => {
     expect(merged.hr_classify_tag).toBe('Success')
   })
 
+  it('falls back to webhook-provided classification_tag when HR run is null', () => {
+    // Reproduces the prod case where HR's `/api/v1/runs/:id` backfill
+    // returns null (bad API key, missing run id, network blip) but the
+    // templated per-node webhook itself shipped the classify tag in
+    // the body. Before this fallback the tag was silently dropped.
+    const merged = mergeRunIntoInput({ ...baseInput, classification_tag: 'Success' }, null)
+    expect(merged.hr_classify_tag).toBe('Success')
+    expect(merged.hr_run_fetched).toBe(false)
+  })
+
+  it('prefers HR runs-API tag over webhook classification_tag when both exist', () => {
+    // Runs-API is the canonical source -- it's what HR's Classify node
+    // actually produced post-call. The webhook body tag can be stale if
+    // a workflow builder hard-codes it or templates a prior iteration.
+    const merged = mergeRunIntoInput(
+      { ...baseInput, classification_tag: 'Rate too high' },
+      makeRun({ classification: { tag: 'Success' } }),
+    )
+    expect(merged.hr_classify_tag).toBe('Success')
+  })
+
   it('falls back to carrier_mc="unknown" when neither webhook nor extraction has it', () => {
     const merged = mergeRunIntoInput(baseInput, makeRun())
     expect(merged.carrier_mc).toBe('unknown')

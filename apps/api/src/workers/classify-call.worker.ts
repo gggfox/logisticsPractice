@@ -10,6 +10,7 @@ import {
   getRedisConnection,
 } from '../queues/index.js'
 import { isValidMcFormat } from '../routes/webhooks/validation.js'
+import { attemptBookLoad } from '../services/book-load.service.js'
 import { convexService } from '../services/convex.service.js'
 import { type HappyRobotCallRun, getRun } from '../services/happyrobot.service.js'
 
@@ -230,16 +231,21 @@ async function updateLoadStatusBooked(
 interface WriteClassifyResult {
   fellBack: boolean
   load_status_updated: boolean
+  auto_book_attempted: boolean
+  auto_book_reason?: string
 }
 
 /**
  * Two write paths, selected by the authoritative-book gate in the caller:
  *
  *   - `authoritative_book = true`: same contract as `POST
- *     /api/v1/loads/:load_id/book`. Forces `outcome: 'booked'` with
- *     carrier_mc + load_id + final_rate on the calls row via
- *     `markBooked`, then flips the load to `booked`. Used when validation
- *     (MC format + load DB existence) passed.
+ *     /api/v1/loads/:load_id/book`. Routes through the shared
+ *     `attemptBookLoad` service so the guards (load state, rate
+ *     bounds) are identical across the HTTP book_load tool and this
+ *     post-webhook auto-book path. On any service-level rejection we
+ *     fall through to `createCallWithFallback` so the call row still
+ *     lands with the classify-determined outcome -- we just don't
+ *     flip the load.
  *
  *   - otherwise: existing `createCallWithFallback` path. If the outcome
  *     still says `booked` (e.g. HR Classify tag `Success`) AND the load
@@ -260,19 +266,55 @@ async function writeClassifyResult(args: {
   const { data, merged, outcome, final_rate, negotiations_count, enrich } = args
 
   if (args.authoritative_book && merged.load_id !== undefined && final_rate !== undefined) {
-    await convexService.calls.markBooked({
+    const bookResult = await attemptBookLoad({
       call_id: data.call_id,
       load_id: merged.load_id,
       carrier_mc: merged.carrier_mc,
-      final_rate,
+      agreed_rate: final_rate,
       started_at: data.started_at,
       ended_at: data.ended_at,
     })
-    const load_status_updated = await updateLoadStatusBooked(merged.load_id, {
-      callId: data.call_id,
-      enrich,
+
+    if (bookResult.booked) {
+      enrich({
+        auto_book_attempted: true,
+        loadboard_rate: bookResult.loadboard_rate,
+        discount_percent: bookResult.discount_percent,
+      })
+      return {
+        fellBack: false,
+        load_status_updated: bookResult.load_status_updated,
+        auto_book_attempted: true,
+      }
+    }
+
+    // `attemptBookLoad` rejected. `already_booked` is the idempotent
+    // case -- a prior webhook / `/api/v1/offers` already flipped this
+    // load, so we still report the load as booked from our POV and
+    // write the call row via the fallback path to capture transcript /
+    // outcome / sentiment details. The other failure reasons (load not
+    // found, rate out of bounds, wrong state) need the call row too,
+    // with a surfaced `auto_book_reason` for SigNoz so operators can
+    // see why the auto-book was declined.
+    enrich({
+      auto_book_attempted: true,
+      auto_book_reason: bookResult.reason,
+      ...('loadboard_rate' in bookResult ? { loadboard_rate: bookResult.loadboard_rate } : {}),
+      ...('min_acceptable_rate' in bookResult
+        ? { min_acceptable_rate: bookResult.min_acceptable_rate }
+        : {}),
     })
-    return { fellBack: false, load_status_updated }
+    if (bookResult.reason !== 'already_booked') {
+      logger.warn(
+        {
+          call_id: data.call_id,
+          load_id: merged.load_id,
+          final_rate,
+          reason: bookResult.reason,
+        },
+        'classify: auto-book rejected by shared book-load guards',
+      )
+    }
   }
 
   const result = await createCallWithFallback(
@@ -304,7 +346,11 @@ async function writeClassifyResult(args: {
       enrich,
     })
   }
-  return { fellBack: result.fellBack, load_status_updated }
+  return {
+    fellBack: result.fellBack,
+    load_status_updated,
+    auto_book_attempted: args.authoritative_book,
+  }
 }
 
 /**
@@ -337,6 +383,15 @@ export function mergeRunIntoInput(
     run?.duration_seconds ??
     numberFromExtraction(extraction, 'call_duration_seconds')
 
+  // HR's AI Classify tag can reach us from two sources: the runs-API
+  // response (`run.classification.tag`), or the per-node templated
+  // webhook body (`data.classification_tag`). Prefer the runs-API
+  // value because it's the canonical post-call output; the webhook
+  // body is only populated when the HR workflow templates include
+  // `classification.tag` explicitly. Either is strictly better than
+  // running the transcript keyword scan against an empty string.
+  const hr_classify_tag = run?.classification?.tag ?? data.classification_tag
+
   return {
     transcript,
     speakers,
@@ -345,7 +400,7 @@ export function mergeRunIntoInput(
     load_id,
     duration_seconds,
     hr_run_fetched: run !== null,
-    hr_classify_tag: run?.classification?.tag,
+    hr_classify_tag,
     transcript_source,
   }
 }
@@ -368,20 +423,20 @@ async function runClassifyJob(
   // never carries. Swallow errors: classify must still write a row
   // even if HR is down.
   //
-  // HR's `/api/v1/runs/:run_id` is keyed by `run_id`, not `session_id`.
-  // Skip the lookup when `run_id` is absent (older enqueued jobs from
-  // before this field was added, or flat-shape test payloads) and rely
-  // on webhook data alone.
-  const run =
-    data.run_id === undefined
-      ? null
-      : await getRun(data.run_id).catch((err) => {
-          logger.warn(
-            { run_id: data.run_id, call_id: data.call_id, err },
-            'happyrobot getRun failed',
-          )
-          return null
-        })
+  // HR's `/api/v1/runs/:run_id` is keyed by `run_id`. For the inbound
+  // Web-call workflow the `session_id` we store as `call_id` happens
+  // to equal the run_id (verified via the runs-API response -- HR's
+  // `data.session_id` in the CloudEvents envelope is actually the run
+  // id for this workflow shape). So when the per-node templated
+  // webhook omits `run_id`, fall back to `call_id` instead of skipping
+  // backfill entirely. `getRun` returns `null` on 404 so a genuinely
+  // unrelated id doesn't throw; we still gate the outcome on whatever
+  // data we do get back.
+  const idForRunLookup = data.run_id ?? data.call_id
+  const run = await getRun(idForRunLookup).catch((err) => {
+    logger.warn({ run_id: data.run_id, call_id: data.call_id, err }, 'happyrobot getRun failed')
+    return null
+  })
 
   const merged = mergeRunIntoInput(data, run)
   const ready = isClassifyInputReady(merged)
